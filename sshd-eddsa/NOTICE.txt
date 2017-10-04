@@ -1,0 +1,5 @@
+This work is derived from
+
+https://github.com/str4d/ed25519-java/blob/master/LICENSE.txt
+
+released under Creative Commons Legal Code, CC0 1.0 Universal

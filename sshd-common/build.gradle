@@ -1,0 +1,4 @@
+dependencies {
+    compile project(':sshd-eddsa')
+    compile "org.bouncycastle:bcpkix-jdk15on:${project.property('bouncycastle.version')}"
+}

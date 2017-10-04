@@ -1,0 +1,8 @@
+rootProject.name = name
+
+include 'sshd-eddsa'
+include 'sshd-common'
+include 'sshd-client'
+include 'sshd-fs'
+include 'sshd-server'
+include 'groovy-sshd'
