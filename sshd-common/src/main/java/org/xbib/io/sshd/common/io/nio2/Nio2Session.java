@@ -30,7 +30,7 @@ import java.util.concurrent.atomic.AtomicReference;
  */
 public class Nio2Session extends AbstractCloseable implements IoSession {
 
-    public static final int DEFAULT_READBUF_SIZE = 32 * 1024;
+    public static final int DEFAULT_READBUF_SIZE = 8 * 1024;
 
     private static final AtomicLong SESSION_ID_GENERATOR = new AtomicLong(100L);
 

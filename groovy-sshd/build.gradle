@@ -1,13 +1,11 @@
-
 apply plugin: 'groovy'
 
 dependencies {
     compile project(':sshd-fs')
-    compile "org.apache.logging.log4j:log4j-core:2.8.2"
-    compileOnly 'org.codehaus.groovy:groovy-all:2.4.12'
-    testCompile 'org.codehaus.groovy:groovy-all:2.4.12'
+    compileOnly "org.codehaus.groovy:groovy-all:${project.property('groovy.version')}"
+    testCompile "org.codehaus.groovy:groovy-all:${project.property('groovy.version')}"
+    testCompile "org.apache.logging.log4j:log4j-core:${project.property('log4j.version')}"
 }
-
 
 compileGroovy {
     sourceCompatibility = JavaVersion.VERSION_1_8

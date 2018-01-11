@@ -54,7 +54,7 @@ public class Nio2Connector extends Nio2Service implements IoConnector {
             @SuppressWarnings("synthetic-access")
             protected void onCompleted(Void result, Object attachment) {
                 try {
-                    org.xbib.io.sshd.common.io.nio2.Nio2Session session = createSession(manager, handler, socket);
+                    Nio2Session session = createSession(manager, handler, socket);
                     handler.sessionCreated(session);
                     sessions.put(session.getId(), session);
                     future.setSession(session);
