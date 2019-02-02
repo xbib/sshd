@@ -292,9 +292,7 @@ public class SshServer extends AbstractFactoryManager implements ServerFactoryMa
             sessionFactory = createSessionFactory();
         }
         acceptor = createAcceptor();
-
-        setupSessionTimeout(sessionFactory);
-
+        setupSessionTimeout();
         String hostsList = getHost();
         if (!GenericUtils.isEmpty(hostsList)) {
             String[] hosts = GenericUtils.split(hostsList, ',');
@@ -349,7 +347,7 @@ public class SshServer extends AbstractFactoryManager implements ServerFactoryMa
     protected Closeable getInnerCloseable() {
         Object closeId = toString();
         return builder()
-            .run(closeId, () -> removeSessionTimeout(sessionFactory))
+            .run(closeId, () -> removeSessionTimeout())
             .sequential(acceptor, ioServiceFactory)
             .run(closeId, () -> {
                 acceptor = null;
