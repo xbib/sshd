@@ -19,14 +19,20 @@ public class BufferedIoOutputStream extends AbstractInnerCloseable implements Io
     protected final IoOutputStream out;
     protected final Queue<IoWriteFutureImpl> writes = new ConcurrentLinkedQueue<>();
     protected final AtomicReference<IoWriteFutureImpl> currentWrite = new AtomicReference<>();
+    protected final Object id;
 
-    public BufferedIoOutputStream(IoOutputStream out) {
+    public BufferedIoOutputStream(Object id, IoOutputStream out) {
         this.out = out;
+        this.id = id;
+    }
+
+    public Object getId() {
+        return id;
     }
 
     @Override
     public IoWriteFuture write(Buffer buffer) {
-        IoWriteFutureImpl future = new IoWriteFutureImpl(buffer);
+        IoWriteFutureImpl future = new IoWriteFutureImpl(getId(), buffer);
         if (isClosing()) {
             future.setValue(new IOException("Closed"));
         } else {
@@ -64,7 +70,7 @@ public class BufferedIoOutputStream extends AbstractInnerCloseable implements Io
     @Override
     protected Closeable getInnerCloseable() {
         return builder()
-                .when(writes)
+                .when(getId(), writes)
                 .close(out)
                 .build();
     }

@@ -20,16 +20,18 @@ import java.util.Objects;
  *
  */
 public class ChannelAsyncInputStream extends AbstractCloseable implements IoInputStream, ChannelHolder {
-    private final org.xbib.io.sshd.common.channel.Channel channelInstance;
+    private final Channel channelInstance;
     private final Buffer buffer = new ByteArrayBuffer();
+    private final Object readFutureId;
     private IoReadFutureImpl pending;
 
-    public ChannelAsyncInputStream(org.xbib.io.sshd.common.channel.Channel channel) {
+    public ChannelAsyncInputStream(Channel channel) {
         this.channelInstance = Objects.requireNonNull(channel, "No channel");
+        this.readFutureId = toString();
     }
 
     @Override
-    public org.xbib.io.sshd.common.channel.Channel getChannel() {
+    public Channel getChannel() {
         return channelInstance;
     }
 
@@ -42,7 +44,7 @@ public class ChannelAsyncInputStream extends AbstractCloseable implements IoInpu
 
     @Override
     public IoReadFuture read(Buffer buf) {
-        IoReadFutureImpl future = new IoReadFutureImpl(buf);
+        IoReadFutureImpl future = new IoReadFutureImpl(readFutureId, buf);
         if (isClosing()) {
             future.setValue(new IOException("Closed"));
         } else {
@@ -116,8 +118,8 @@ public class ChannelAsyncInputStream extends AbstractCloseable implements IoInpu
     public static class IoReadFutureImpl extends DefaultVerifiableSshFuture<IoReadFuture> implements IoReadFuture {
         private final Buffer buffer;
 
-        public IoReadFutureImpl(Buffer buffer) {
-            super(null);
+        public IoReadFutureImpl(Object id, Buffer buffer) {
+            super(id, null);
             this.buffer = buffer;
         }
 
@@ -128,9 +130,7 @@ public class ChannelAsyncInputStream extends AbstractCloseable implements IoInpu
 
         @Override
         public IoReadFuture verify(long timeoutMillis) throws IOException {
-            long startTime = System.nanoTime();
-            Number result = verifyResult(Number.class, timeoutMillis);
-            long endTime = System.nanoTime();
+            verifyResult(Number.class, timeoutMillis);
             return this;
         }
 

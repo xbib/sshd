@@ -1,7 +1,5 @@
 package org.xbib.io.sshd.common.agent;
 
-import org.xbib.io.sshd.common.agent.SshAgent;
-import org.xbib.io.sshd.common.agent.SshAgentConstants;
 import org.xbib.io.sshd.common.config.keys.KeyUtils;
 import org.xbib.io.sshd.common.util.Pair;
 import org.xbib.io.sshd.common.util.ValidateUtils;
@@ -14,9 +12,6 @@ import java.security.KeyPair;
 import java.security.PublicKey;
 import java.util.List;
 
-/**
- *
- */
 public abstract class AbstractAgentClient extends AbstractLoggingBean {
 
     private final Buffer buffer = new ByteArrayBuffer();

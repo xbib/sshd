@@ -64,7 +64,7 @@ public class ChannelSession extends AbstractServerChannel {
             Collections.singletonList(PuttyRequestHandler.INSTANCE);
     protected final AtomicBoolean commandStarted = new AtomicBoolean(false);
     protected final StandardEnvironment env = new StandardEnvironment();
-    protected final CloseFuture commandExitFuture = new DefaultCloseFuture(lock);
+    protected final CloseFuture commandExitFuture;
     protected String type;
     protected ChannelAsyncOutputStream asyncOut;
     protected ChannelAsyncOutputStream asyncErr;
@@ -80,6 +80,7 @@ public class ChannelSession extends AbstractServerChannel {
 
     public ChannelSession(Collection<? extends RequestHandler<Channel>> handlers) {
         super(handlers);
+        commandExitFuture = new DefaultCloseFuture(getClass().getSimpleName(), lock);
     }
 
     @Override

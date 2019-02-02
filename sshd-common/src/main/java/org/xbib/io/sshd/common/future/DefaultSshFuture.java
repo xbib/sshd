@@ -26,7 +26,8 @@ public class DefaultSshFuture<T extends SshFuture> extends AbstractSshFuture<T> 
      * @param lock A synchronization object for locking access - if {@code null}
      *             then synchronization occurs on {@code this} instance
      */
-    public DefaultSshFuture(Object lock) {
+    public DefaultSshFuture(Object id, Object lock) {
+        super(id);
         this.lock = lock != null ? lock : this;
     }
 

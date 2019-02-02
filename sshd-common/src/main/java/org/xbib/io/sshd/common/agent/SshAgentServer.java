@@ -8,13 +8,6 @@ import java.util.concurrent.TimeUnit;
  */
 public interface SshAgentServer extends Channel {
 
-    /**
-     * Value that can be set on the {@link org.xbib.io.sshd.common.FactoryManager}
-     * or the session to configure the channel open timeout value (millis). If not specified
-     * then {@link #DEFAULT_CHANNEL_OPEN_TIMEOUT} value is used
-     */
-    String CHANNEL_OPEN_TIMEOUT_PROP = "ssh-agent-server-channel-open-timeout";
-
     long DEFAULT_CHANNEL_OPEN_TIMEOUT = TimeUnit.SECONDS.toMillis(30L);
 
     /**

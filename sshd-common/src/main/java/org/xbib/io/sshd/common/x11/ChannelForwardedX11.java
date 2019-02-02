@@ -35,7 +35,7 @@ public class ChannelForwardedX11 extends AbstractClientChannel {
         if (closeFuture.isClosed()) {
             throw new SshException("Session has been closed");
         }
-        openFuture = new DefaultOpenFuture(lock);
+        openFuture = new DefaultOpenFuture(remote, lock);
 
         Session session = getSession();
 
@@ -74,7 +74,7 @@ public class ChannelForwardedX11 extends AbstractClientChannel {
         Window wLocal = getLocalWindow();
         wLocal.consumeAndCheck(len);
         // use a clone in case data buffer is re-used
-        serverSession.write(ByteArrayBuffer.getCompactClone(data, off, (int) len));
+        serverSession.writePacket(ByteArrayBuffer.getCompactClone(data, off, (int) len));
     }
 
     @Override

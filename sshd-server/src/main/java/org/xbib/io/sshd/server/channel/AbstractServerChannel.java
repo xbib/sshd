@@ -66,7 +66,7 @@ public abstract class AbstractServerChannel extends AbstractChannel implements S
     }
 
     protected OpenFuture doInit(Buffer buffer) {
-        OpenFuture f = new DefaultOpenFuture(this);
+        OpenFuture f = new DefaultOpenFuture(this, this);
         String changeEvent = "doInit";
         try {
             signalChannelOpenSuccess();

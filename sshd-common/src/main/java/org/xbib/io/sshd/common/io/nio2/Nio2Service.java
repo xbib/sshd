@@ -83,7 +83,7 @@ public abstract class Nio2Service extends AbstractInnerCloseable implements IoSe
 
     @Override
     protected Closeable getInnerCloseable() {
-        return builder().parallel(sessions.values()).build();
+        return builder().parallel(toString(), sessions.values()).build();
     }
 
     @Override

@@ -222,7 +222,7 @@ public abstract class AbstractConnectionService<S extends AbstractSession>
     protected Closeable getInnerCloseable() {
         return builder()
                 .sequential(tcpipForwarderHolder.get(), agentForwardHolder.get(), x11ForwardHolder.get())
-                .parallel(channels.values())
+                .parallel(toString(), channels.values())
                 .build();
     }
 
@@ -591,7 +591,7 @@ public abstract class AbstractConnectionService<S extends AbstractSession>
 
     protected IoWriteFuture sendGlobalResponse(Buffer buffer, String req, RequestHandler.Result result, boolean wantReply) throws IOException {
         if (RequestHandler.Result.Replied.equals(result) || (!wantReply)) {
-            return new AbstractIoWriteFuture(null) {
+            return new AbstractIoWriteFuture(req,null) {
                 {
                     setValue(Boolean.TRUE);
                 }

@@ -11,14 +11,21 @@ import java.io.StreamCorruptedException;
 /**
  * @param <T> Type of future
  */
-public abstract class AbstractSshFuture<T extends org.xbib.io.sshd.common.future.SshFuture> extends AbstractLoggingBean implements SshFuture<T> {
+public abstract class AbstractSshFuture<T extends SshFuture> extends AbstractLoggingBean implements SshFuture<T> {
     /**
      * A default value to indicate the future has been canceled
      */
     protected static final Object CANCELED = new Object();
 
-    protected AbstractSshFuture() {
-        super();
+    private final Object id;
+
+    protected AbstractSshFuture(Object id) {
+        this.id = id;
+    }
+
+    @Override
+    public Object getId() {
+        return id;
     }
 
     @Override
@@ -124,5 +131,10 @@ public abstract class AbstractSshFuture<T extends org.xbib.io.sshd.common.future
     @SuppressWarnings("unchecked")
     protected T asT() {
         return (T) this;
+    }
+
+    @Override
+    public String toString() {
+        return getClass().getSimpleName() + "[id=" + getId() + "]";
     }
 }

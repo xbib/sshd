@@ -11,8 +11,9 @@ import java.util.Objects;
  * A default implementation of {@link AuthFuture}.
  */
 public class DefaultAuthFuture extends DefaultVerifiableSshFuture<AuthFuture> implements AuthFuture {
-    public DefaultAuthFuture(Object lock) {
-        super(lock);
+
+    public DefaultAuthFuture(Object id, Object lock) {
+        super(id, lock);
     }
 
     @Override

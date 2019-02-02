@@ -25,7 +25,7 @@ public class Nio2Connector extends Nio2Service implements IoConnector {
     @Override
     public IoConnectFuture connect(SocketAddress address) {
 
-        IoConnectFuture future = new DefaultIoConnectFuture(null);
+        IoConnectFuture future = new DefaultIoConnectFuture(address,null);
         try {
             AsynchronousChannelGroup group = getChannelGroup();
             AsynchronousSocketChannel socket =
@@ -81,8 +81,8 @@ public class Nio2Connector extends Nio2Service implements IoConnector {
     }
 
     public static class DefaultIoConnectFuture extends DefaultSshFuture<IoConnectFuture> implements IoConnectFuture {
-        public DefaultIoConnectFuture(Object lock) {
-            super(lock);
+        public DefaultIoConnectFuture(Object id, Object lock) {
+            super(id, lock);
         }
 
         @Override

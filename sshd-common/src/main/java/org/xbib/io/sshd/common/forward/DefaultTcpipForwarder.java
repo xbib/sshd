@@ -792,7 +792,7 @@ public class DefaultTcpipForwarder
 
     @Override
     protected synchronized Closeable getInnerCloseable() {
-        return builder().parallel(dynamicLocal.values()).close(acceptor).build();
+        return builder().parallel(toString(), dynamicLocal.values()).close(acceptor).build();
     }
 
     @Override

@@ -4,7 +4,6 @@ import org.xbib.io.sshd.common.agent.AgentForwardSupport;
 import org.xbib.io.sshd.client.ClientFactoryManager;
 import org.xbib.io.sshd.common.FactoryManager;
 import org.xbib.io.sshd.common.SshConstants;
-import org.xbib.io.sshd.common.SshException;
 import org.xbib.io.sshd.common.io.AbstractIoWriteFuture;
 import org.xbib.io.sshd.common.io.IoWriteFuture;
 import org.xbib.io.sshd.common.session.helpers.AbstractConnectionService;
@@ -19,7 +18,7 @@ import java.util.concurrent.TimeUnit;
  * Client side <code>ssh-connection</code> service.
  */
 public class ClientConnectionService extends AbstractConnectionService<AbstractClientSession> implements ClientSessionHolder {
-    public ClientConnectionService(AbstractClientSession s) throws SshException {
+    public ClientConnectionService(AbstractClientSession s) {
         super(s);
     }
 
@@ -64,7 +63,7 @@ public class ClientConnectionService extends AbstractConnectionService<AbstractC
         } catch (IOException e) {
 
             final Throwable t = e;
-            return new AbstractIoWriteFuture(null) {
+            return new AbstractIoWriteFuture(request,null) {
                 {
                     setValue(t);
                 }

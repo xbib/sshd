@@ -1,4 +1,5 @@
 plugins {
+    id "com.github.spotbugs" version "1.6.9"
     id "org.sonarqube" version "2.6.1"
     id "io.codearte.nexus-staging" version "0.11.0"
 }
@@ -8,9 +9,9 @@ allprojects {
     apply plugin: 'java'
     apply plugin: 'maven'
     apply plugin: 'signing'
-    apply plugin: 'findbugs'
     apply plugin: 'pmd'
     apply plugin: 'checkstyle'
+    apply plugin: "com.github.spotbugs"
     apply plugin: "jacoco"
 
     repositories {
@@ -26,10 +27,11 @@ allprojects {
         wagon "org.apache.maven.wagon:wagon-ssh:${project.property('wagon.version')}"
     }
 
-    sourceCompatibility = JavaVersion.VERSION_1_8
-    targetCompatibility = JavaVersion.VERSION_1_8
+    compileJava {
+        sourceCompatibility = JavaVersion.VERSION_1_8
+        targetCompatibility = JavaVersion.VERSION_1_8
+    }
 
-    [compileJava, compileTestJava]*.options*.encoding = 'UTF-8'
     tasks.withType(JavaCompile) {
         options.compilerArgs << "-Xlint:all" << "-profile" << "compact1"
     }
@@ -39,19 +41,27 @@ allprojects {
     }
 
     test {
-        systemProperty 'java.security.egd', 'file:/dev/./urandom'
+        systemProperty 'java.security.egd', 'file:///dev/urandom'
         testLogging {
             showStandardStreams = false
             exceptionFormat = 'full'
         }
     }
 
-    tasks.withType(FindBugs) {
+    spotbugs {
+        toolVersion = '3.1.3'
+        sourceSets = [sourceSets.main]
         ignoreFailures = true
-        reports {
-            xml.enabled = false
-            html.enabled = true
-        }
+        effort = "max"
+        reportLevel = "high"
+    }
+    spotbugsMain.reports {
+        xml.enabled = false
+        html.enabled = true
+    }
+    spotbugsTest.reports {
+        xml.enabled = false
+        html.enabled = true
     }
 
     tasks.withType(Pmd) {

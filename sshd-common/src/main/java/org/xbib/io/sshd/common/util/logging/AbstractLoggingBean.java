@@ -2,7 +2,6 @@ package org.xbib.io.sshd.common.util.logging;
 
 import org.xbib.io.sshd.common.util.GenericUtils;
 
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Logger;
 
 /**
@@ -12,7 +11,6 @@ import java.util.logging.Logger;
  */
 public abstract class AbstractLoggingBean {
     protected final Logger log;
-    private final AtomicReference<SimplifiedLog> simplifiedLog = new AtomicReference<>();
 
     /**
      * Default constructor - creates a logger using the full class name
@@ -34,17 +32,5 @@ public abstract class AbstractLoggingBean {
             name += "[" + discriminator + "]";
         }
         log = Logger.getLogger(name);
-    }
-
-    protected SimplifiedLog getSimplifiedLogger() {
-        SimplifiedLog logger;
-        synchronized (simplifiedLog) {
-            logger = simplifiedLog.get();
-            if (logger == null) {
-                logger = LoggingUtils.wrap(log);
-            }
-        }
-
-        return logger;
     }
 }

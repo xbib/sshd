@@ -15,8 +15,8 @@ public class ParallelCloseable extends SimpleCloseable {
 
     private final Iterable<? extends Closeable> closeables;
 
-    public ParallelCloseable(Object lock, Iterable<? extends Closeable> closeables) {
-        super(lock);
+    public ParallelCloseable(Object id, Object lock, Iterable<? extends Closeable> closeables) {
+        super(id, lock);
         this.closeables = (closeables == null) ? Collections.emptyList() : closeables;
     }
 

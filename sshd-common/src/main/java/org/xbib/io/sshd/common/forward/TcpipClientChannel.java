@@ -57,7 +57,7 @@ public class TcpipClientChannel extends AbstractClientChannel {
         if (closeFuture.isClosed()) {
             throw new SshException("Session has been closed");
         }
-        openFuture = new DefaultOpenFuture(lock);
+        openFuture = new DefaultOpenFuture(src, lock);
 
         Session session = getSession();
         InetAddress srcAddress = src.getAddress();
@@ -100,7 +100,7 @@ public class TcpipClientChannel extends AbstractClientChannel {
         Buffer buf = ByteArrayBuffer.getCompactClone(data, off, (int) len);
         Window wLocal = getLocalWindow();
         wLocal.consumeAndCheck(len);
-        serverSession.write(buf);
+        serverSession.writePacket(buf);
     }
 
     @Override

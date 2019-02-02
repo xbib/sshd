@@ -36,10 +36,8 @@ public class DefaultAgentForwardSupport extends AbstractCloseable implements Age
                 agentServer = Objects.requireNonNull(createSshAgentServer(serviceInstance, session), "No agent server created");
                 agentServerHolder.set(agentServer);
             }
+            return agentServer.getId();
 
-            String agentId = agentServer.getId();
-
-            return agentId;
         } catch (Throwable t) {
             if (t instanceof IOException) {
                 throw (IOException) t;

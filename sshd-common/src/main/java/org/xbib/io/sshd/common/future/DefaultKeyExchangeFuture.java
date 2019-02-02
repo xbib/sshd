@@ -8,8 +8,9 @@ import java.io.IOException;
  *
  */
 public class DefaultKeyExchangeFuture extends DefaultVerifiableSshFuture<KeyExchangeFuture> implements KeyExchangeFuture {
-    public DefaultKeyExchangeFuture(Object lock) {
-        super(lock);
+
+    public DefaultKeyExchangeFuture(Object id, Object lock) {
+        super(id, lock);
     }
 
     @Override

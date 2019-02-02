@@ -11,8 +11,8 @@ import java.util.Objects;
 public class IoWriteFutureImpl extends AbstractIoWriteFuture {
     private final Buffer buffer;
 
-    public IoWriteFutureImpl(Buffer buffer) {
-        super(null);
+    public IoWriteFutureImpl(Object id, Buffer buffer) {
+        super(id,null);
         this.buffer = Objects.requireNonNull(buffer, "No buffer provided");
     }
 

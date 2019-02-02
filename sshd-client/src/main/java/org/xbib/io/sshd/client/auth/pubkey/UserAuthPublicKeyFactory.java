@@ -48,7 +48,7 @@ public class UserAuthPublicKeyFactory extends AbstractUserAuthFactory implements
     }
 
     @Override
-    public org.xbib.io.sshd.client.auth.pubkey.UserAuthPublicKey create() {
+    public UserAuthPublicKey create() {
         return new UserAuthPublicKey(getSignatureFactories());
     }
 }

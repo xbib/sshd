@@ -774,7 +774,7 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
     @Override
     protected Closeable getInnerCloseable() {
         return builder()
-                .parallel(getServices())
+                .parallel(toString(), getServices())
                 .close(ioSession)
                 .build();
     }
@@ -852,11 +852,12 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
         if (!KexState.DONE.equals(kexState.get())) {
             byte cmd = buffer.array()[buffer.rpos()];
             if (cmd > SshConstants.SSH_MSG_KEX_LAST) {
+                String cmdName = org.apache.sshd.common.SshConstants.getCommandMessageName(cmd & 0xFF);
                 synchronized (pendingPackets) {
                     if (!KexState.DONE.equals(kexState.get())) {
                         if (pendingPackets.isEmpty()) {
                         }
-                        PendingWriteFuture future = new PendingWriteFuture(buffer);
+                        PendingWriteFuture future = new PendingWriteFuture(cmdName, buffer);
                         pendingPackets.add(future);
                         return future;
                     }
@@ -912,11 +913,11 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
         synchronized (encodeLock) {
             if (ignoreBuf != null) {
                 ignoreBuf = encode(ignoreBuf);
-                ioSession.write(ignoreBuf);
+                ioSession.writePacket(ignoreBuf);
             }
 
             buffer = encode(buffer);
-            future = ioSession.write(buffer);
+            future = ioSession.writePacket(buffer);
         }
 
         return future;
@@ -1269,9 +1270,9 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
      * @return {@link IoWriteFuture} that can be used to wait for notification
      * that identification has been send
      */
-    protected IoWriteFuture sendIdentification(String ident) {
+    protected IoWriteFuture sendIdentification(String ident) throws IOException {
         byte[] data = (ident + "\r\n").getBytes(StandardCharsets.UTF_8);
-        return ioSession.write(new ByteArrayBuffer(data));
+        return ioSession.writePacket(new ByteArrayBuffer(data));
     }
 
     /**
@@ -2069,7 +2070,7 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
 
         sendKexInit();
 
-        DefaultKeyExchangeFuture newFuture = new DefaultKeyExchangeFuture(null);
+        DefaultKeyExchangeFuture newFuture = new DefaultKeyExchangeFuture(toString(),null);
         DefaultKeyExchangeFuture kexFuture = kexFutureHolder.getAndSet(newFuture);
         if (kexFuture != null) {
             synchronized (kexFuture) {

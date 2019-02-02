@@ -18,18 +18,6 @@ import java.util.List;
 public interface AuthenticationIdentitiesProvider extends KeyIdentityProvider, PasswordIdentityProvider {
 
     /**
-     * Compares 2 password identities - returns zero ONLY if <U>both</U> compared
-     * objects are {@link String}s and equal to each other
-     */
-    Comparator<Object> PASSWORD_IDENTITY_COMPARATOR = (o1, o2) -> {
-        if (!(o1 instanceof String) || !(o2 instanceof String)) {
-            return -1;
-        } else {
-            return ((String) o1).compareTo((String) o2);
-        }
-    };
-
-    /**
      * Compares 2 {@link KeyPair} identities - returns zero ONLY if <U>both</U> compared
      * objects are {@link KeyPair}s and equal to each other
      */

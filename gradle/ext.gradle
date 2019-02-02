@@ -1,8 +1,8 @@
 ext {
     user = 'xbib'
-    projectName = 'archive'
-    projectDescription = 'Archive algorithms'
-    scmUrl = 'https://github.com/xbib/archive'
-    scmConnection = 'scm:git:git://github.com/xbib/archive.git'
-    scmDeveloperConnection = 'scm:git:git://github.com/xbib/archive.git'
+    projectName = 'sshd'
+    projectDescription = 'SSHD server and client library for Java and Groovy'
+    scmUrl = 'https://github.com/xbib/sshd'
+    scmConnection = 'scm:git:git://github.com/xbib/sshd.git'
+    scmDeveloperConnection = 'scm:git:git://github.com/xbib/sshd.git'
 }

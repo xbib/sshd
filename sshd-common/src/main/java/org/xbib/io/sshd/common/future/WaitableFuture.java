@@ -12,6 +12,8 @@ import java.util.concurrent.TimeUnit;
  */
 public interface WaitableFuture {
 
+    Object getId();
+
     /**
      * Wait {@link Long#MAX_VALUE} msec. for the asynchronous operation to complete.
      * The attached listeners will be notified when the operation is

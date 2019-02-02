@@ -1,6 +1,7 @@
 package org.xbib.io.sshd.fs;
 
 import org.xbib.io.sshd.client.subsystem.sftp.SftpClient;
+import org.xbib.io.sshd.client.subsystem.sftp.SftpRemotePathChannel;
 
 import java.io.IOException;
 import java.util.Collection;

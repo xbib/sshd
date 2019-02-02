@@ -9,8 +9,8 @@ import java.util.Objects;
  * A default implementation of {@link OpenFuture}.
  */
 public class DefaultOpenFuture extends DefaultVerifiableSshFuture<OpenFuture> implements OpenFuture {
-    public DefaultOpenFuture(Object lock) {
-        super(lock);
+    public DefaultOpenFuture(Object id, Object lock) {
+        super(id, lock);
     }
 
     @Override

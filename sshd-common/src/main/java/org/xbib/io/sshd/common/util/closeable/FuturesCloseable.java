@@ -5,6 +5,7 @@ import org.xbib.io.sshd.common.future.DefaultSshFuture;
 import org.xbib.io.sshd.common.future.SshFuture;
 import org.xbib.io.sshd.common.future.SshFutureListener;
 
+import java.io.IOException;
 import java.util.Collections;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -15,8 +16,8 @@ public class FuturesCloseable<T extends SshFuture> extends SimpleCloseable {
 
     private final Iterable<? extends SshFuture<T>> futures;
 
-    public FuturesCloseable(Object lock, Iterable<? extends SshFuture<T>> futures) {
-        super(lock);
+    public FuturesCloseable(Object id, Object lock, Iterable<? extends SshFuture<T>> futures) {
+        super(id, lock);
         this.futures = (futures == null) ? Collections.emptyList() : futures;
     }
 

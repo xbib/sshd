@@ -14,7 +14,7 @@ compileGroovy {
 
 test {
     testLogging {
-        showStandardStreams = true
+        showStandardStreams = false
         exceptionFormat = 'full'
     }
 }

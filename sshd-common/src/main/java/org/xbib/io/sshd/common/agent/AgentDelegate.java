@@ -1,6 +1,5 @@
 package org.xbib.io.sshd.common.agent;
 
-import org.xbib.io.sshd.common.agent.SshAgent;
 import org.xbib.io.sshd.common.util.Pair;
 
 import java.io.IOException;

@@ -11,8 +11,8 @@ import java.util.Objects;
  * A default implementation of {@link ConnectFuture}.
  */
 public class DefaultConnectFuture extends DefaultVerifiableSshFuture<ConnectFuture> implements ConnectFuture {
-    public DefaultConnectFuture(Object lock) {
-        super(lock);
+    public DefaultConnectFuture(Object id, Object lock) {
+        super(id, lock);
     }
 
     @Override

@@ -23,6 +23,7 @@ import java.util.Map;
 /**
  *
  */
+@Ignore
 public class FileSystemsTest extends Assert {
 
     private static String url = "sftp://demo.wftpserver.com:2222";

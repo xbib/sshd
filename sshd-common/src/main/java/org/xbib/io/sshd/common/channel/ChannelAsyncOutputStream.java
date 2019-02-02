@@ -22,10 +22,12 @@ public class ChannelAsyncOutputStream extends AbstractCloseable implements IoOut
     private final Channel channelInstance;
     private final byte cmd;
     private final AtomicReference<IoWriteFutureImpl> pendingWrite = new AtomicReference<>();
+    private final Object packetWriteId;
 
     public ChannelAsyncOutputStream(Channel channel, byte cmd) {
         this.channelInstance = Objects.requireNonNull(channel, "No channel");
         this.cmd = cmd;
+        this.packetWriteId = channel.toString() + "[" +SshConstants.getCommandMessageName(cmd) + "]";
     }
 
     @Override
@@ -39,7 +41,7 @@ public class ChannelAsyncOutputStream extends AbstractCloseable implements IoOut
 
     @Override
     public synchronized IoWriteFuture write(final Buffer buffer) {
-        final IoWriteFutureImpl future = new IoWriteFutureImpl(buffer);
+        final IoWriteFutureImpl future = new IoWriteFutureImpl(packetWriteId, buffer);
         if (isClosing()) {
             future.setValue(new IOException("Closed"));
         } else {
