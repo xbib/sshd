@@ -1,5 +1,6 @@
 package org.xbib.io.sshd.fs;
 
+import org.junit.Ignore;
 import org.xbib.io.sshd.client.SshClient;
 import org.xbib.io.sshd.client.config.hosts.HostConfigEntryResolver;
 import org.xbib.io.sshd.client.keyverifier.AcceptAllServerKeyVerifier;
@@ -18,6 +19,7 @@ import java.util.concurrent.TimeUnit;
 
 import static org.xbib.io.sshd.common.subsystem.sftp.SftpConstants.SSH_FX_FAILURE;
 
+@Ignore
 public class SftpClientTest {
 
     @Test

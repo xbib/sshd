@@ -70,7 +70,7 @@ public class ClientBuilder extends BaseBuilder<SshClient, ClientBuilder> {
      * instances of the {@link KeyExchange}s according to the preference
      * order defined by {@link #DEFAULT_KEX_PREFERENCE}.
      * <B>Note:</B> the list may be filtered to exclude unsupported JCE
-     * key exchanges according to the <tt>ignoreUnsupported</tt> parameter
+     * key exchanges according to the {@code ignoreUnsupported} parameter
      * @see org.xbib.io.sshd.common.kex.BuiltinDHFactories#isSupported()
      */
     public static List<NamedFactory<KeyExchange>> setUpDefaultKeyExchanges(boolean ignoreUnsupported) {

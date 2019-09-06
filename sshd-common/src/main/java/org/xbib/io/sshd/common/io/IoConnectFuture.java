@@ -26,7 +26,7 @@ public interface IoConnectFuture extends SshFuture<IoConnectFuture> {
     /**
      * Returns the cause of the connection failure.
      *
-     * @return <tt>null</tt> if the connect operation is not finished yet,
+     * @return {@code null} if the connect operation is not finished yet,
      * or if the connection attempt is successful.
      * @see #getSession()
      */
@@ -42,7 +42,7 @@ public interface IoConnectFuture extends SshFuture<IoConnectFuture> {
     void setException(Throwable exception);
 
     /**
-     * @return <tt>true</tt> if the connect operation is finished successfully.
+     * @return {@code true} if the connect operation is finished successfully.
      */
     boolean isConnected();
 

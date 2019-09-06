@@ -155,7 +155,7 @@ public final class EventListenerUtils {
      *                     </ul>
      * @return A proxy wrapper implementing the same interface, but delegating
      * the calls to the container
-     * @throws IllegalArgumentException if <tt>listenerType</tt> is not an interface
+     * @throws IllegalArgumentException if {@code listenerType} is not an interface
      *                                  or a {@code null} container has been provided
      * @see #proxyWrapper(Class, ClassLoader, Iterable)
      */

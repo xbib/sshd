@@ -110,7 +110,7 @@ public class StandardEnvironment extends AbstractLoggingBean implements Environm
      * @param create If {@code true} and no current listeners are mapped then
      *               creates a new {@link Collection}
      * @return The {@link Collection} of listeners registered for the signal - may be
-     * {@code null} in case <tt>create</tt> is {@code false}
+     * {@code null} in case {@code create} is {@code false}
      */
     protected Collection<SignalListener> getSignalListeners(Signal signal, boolean create) {
         Collection<SignalListener> ls = listeners.get(signal);

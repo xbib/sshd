@@ -14,10 +14,11 @@ import java.nio.file.CopyOption;
 import java.nio.file.DirectoryStream;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
+import java.nio.file.OpenOption;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
-import java.nio.file.attribute.FileAttribute;
+import java.nio.file.attribute.PosixFileAttributeView;
 import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.util.Collections;
@@ -26,11 +27,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-
-import static java.nio.file.StandardOpenOption.CREATE;
-import static java.nio.file.StandardOpenOption.CREATE_NEW;
-import static java.nio.file.StandardOpenOption.READ;
-import static java.nio.file.StandardOpenOption.WRITE;
 
 /**
  */
@@ -41,6 +37,12 @@ public class SFTP {
     private static final int READ_BUFFER_SIZE = 128 * 1024;
 
     private static final int WRITE_BUFFER_SIZE = 128 * 1024;
+
+    private static final Set<PosixFilePermission> DEFAULT_DIR_PERMISSIONS =
+            PosixFilePermissions.fromString("rwxr-xr-x");
+
+    private static final Set<PosixFilePermission> DEFAULT_FILE_PERMISSIONS =
+            PosixFilePermissions.fromString("rw-r--r--");
 
     private final String url;
 
@@ -93,7 +95,8 @@ public class SFTP {
 
     public void upload(Path source, Path target, CopyOption... copyOptions) throws Exception {
         WithContext<Object> action = ctx -> {
-            upload(ctx, Files.newByteChannel(source), target, WRITE_BUFFER_SIZE, copyOptions);
+            upload(ctx, Files.newByteChannel(source), target, WRITE_BUFFER_SIZE,
+                    DEFAULT_DIR_PERMISSIONS, DEFAULT_FILE_PERMISSIONS, copyOptions);
             return null;
         };
         performWithContext(action);
@@ -101,7 +104,8 @@ public class SFTP {
 
     public void upload(Path source, String target, CopyOption... copyOptions) throws Exception {
         WithContext<Object> action = ctx -> {
-            upload(ctx, Files.newByteChannel(source), ctx.fileSystem.getPath(target), WRITE_BUFFER_SIZE, copyOptions);
+            upload(ctx, Files.newByteChannel(source), ctx.fileSystem.getPath(target), WRITE_BUFFER_SIZE,
+                    DEFAULT_DIR_PERMISSIONS, DEFAULT_FILE_PERMISSIONS, copyOptions);
             return null;
         };
         performWithContext(action);
@@ -109,7 +113,8 @@ public class SFTP {
 
     public void upload(InputStream source, Path target, CopyOption... copyOptions) throws Exception {
         WithContext<Object> action = ctx -> {
-            upload(ctx, Channels.newChannel(source), target, WRITE_BUFFER_SIZE, copyOptions);
+            upload(ctx, Channels.newChannel(source), target, WRITE_BUFFER_SIZE,
+                    DEFAULT_DIR_PERMISSIONS, DEFAULT_FILE_PERMISSIONS, copyOptions);
             return null;
         };
         performWithContext(action);
@@ -117,7 +122,8 @@ public class SFTP {
 
     public void upload(InputStream source, String target, CopyOption... copyOptions) throws Exception {
         WithContext<Object> action = ctx -> {
-            upload(ctx, Channels.newChannel(source), ctx.fileSystem.getPath(target), WRITE_BUFFER_SIZE, copyOptions);
+            upload(ctx, Channels.newChannel(source), ctx.fileSystem.getPath(target), WRITE_BUFFER_SIZE,
+                    DEFAULT_DIR_PERMISSIONS, DEFAULT_FILE_PERMISSIONS, copyOptions);
             return null;
         };
         performWithContext(action);
@@ -125,7 +131,8 @@ public class SFTP {
 
     public void download(Path source, Path target, CopyOption... copyOptions) throws Exception {
         WithContext<Object> action = ctx -> {
-            download(ctx, source, target, READ_BUFFER_SIZE, copyOptions);
+            download(ctx, source, target, READ_BUFFER_SIZE,
+                    DEFAULT_DIR_PERMISSIONS, DEFAULT_FILE_PERMISSIONS, copyOptions);
             return null;
         };
         performWithContext(action);
@@ -133,7 +140,8 @@ public class SFTP {
 
     public void download(String source, Path target, CopyOption... copyOptions) throws Exception {
         WithContext<Object> action = ctx -> {
-            download(ctx, ctx.fileSystem.getPath(source), target, READ_BUFFER_SIZE, copyOptions);
+            download(ctx, ctx.fileSystem.getPath(source), target, READ_BUFFER_SIZE,
+                    DEFAULT_DIR_PERMISSIONS, DEFAULT_FILE_PERMISSIONS, copyOptions);
             return null;
         };
         performWithContext(action);
@@ -155,9 +163,9 @@ public class SFTP {
         performWithContext(action);
     }
 
-    public void rename(String source, String target) throws Exception {
+    public void rename(String source, String target, CopyOption... copyOptions) throws Exception {
         WithContext<Object> action = ctx -> {
-            Files.move(ctx.fileSystem.getPath(source), ctx.fileSystem.getPath(target));
+            Files.move(ctx.fileSystem.getPath(source), ctx.fileSystem.getPath(target), copyOptions);
             return null;
         };
         performWithContext(action);
@@ -172,28 +180,14 @@ public class SFTP {
     }
 
     private void upload(SFTPContext ctx,
-                        InputStream source,
-                        Path target,
-                        int bufferSize,
-                        CopyOption... copyOptions) throws Exception {
-        upload(ctx, Channels.newChannel(source), target, bufferSize, copyOptions);
-    }
-
-    private void upload(SFTPContext ctx,
-                        Path source,
-                        Path target,
-                        int bufferSize,
-                        CopyOption... copyOptions) throws Exception {
-        upload(ctx, Files.newByteChannel(source, READ), target, bufferSize, copyOptions);
-    }
-
-    private void upload(SFTPContext ctx,
                         ReadableByteChannel source,
                         Path target,
                         int bufferSize,
+                        Set<PosixFilePermission> dirPerms,
+                        Set<PosixFilePermission> filePerms,
                         CopyOption... copyOptions) throws Exception {
-        preparePath(target);
-        transfer(source, ctx.provider.newByteChannel(target, prepareWriteOptions(copyOptions), prepareFileAttributes()), bufferSize);
+        prepareForWrite(target, dirPerms, filePerms);
+        transfer(source, ctx.provider.newByteChannel(target, prepareWriteOptions(copyOptions)), bufferSize);
     }
 
     private void download(SFTPContext ctx,
@@ -207,44 +201,57 @@ public class SFTP {
                           Path source,
                           WritableByteChannel writableByteChannel,
                           int bufferSize) throws Exception {
-        transfer(ctx.provider.newByteChannel(source, EnumSet.of(READ)), writableByteChannel, bufferSize);
+        transfer(ctx.provider.newByteChannel(source, prepareReadOptions()), writableByteChannel,
+                bufferSize);
     }
 
     private void download(SFTPContext ctx,
                           Path source,
                           Path target,
                           int bufferSize,
+                          Set<PosixFilePermission> dirPerms,
+                          Set<PosixFilePermission> filePerms,
                           CopyOption... copyOptions) throws Exception {
-        preparePath(target);
-        transfer(ctx.provider.newByteChannel(source, EnumSet.of(READ)),
-                Files.newByteChannel(target, prepareWriteOptions(copyOptions), prepareFileAttributes()), bufferSize);
+        prepareForWrite(target, dirPerms, filePerms);
+        transfer(ctx.provider.newByteChannel(source, prepareReadOptions(copyOptions)),
+                Files.newByteChannel(target, prepareWriteOptions(copyOptions)), bufferSize);
     }
 
-    private void preparePath(Path path) throws IOException {
+    private void prepareForWrite(Path path,
+                                 Set<PosixFilePermission> dirPerms,
+                                 Set<PosixFilePermission> filePerms) throws IOException {
         try {
             Path parent = path.getParent();
             if (parent != null && !Files.exists(parent)) {
-                Files.createDirectories(parent);
+                Files.createDirectories(parent, PosixFilePermissions.asFileAttribute(dirPerms));
+            }
+            if (!Files.exists(path)) {
+                Files.createFile(path, PosixFilePermissions.asFileAttribute(filePerms));
+            } else {
+                PosixFileAttributeView posixFileAttributeView =
+                        Files.getFileAttributeView(path, PosixFileAttributeView.class);
+                posixFileAttributeView.setPermissions(filePerms);
             }
         } catch (FileAlreadyExistsException e) {
-            logger.log(Level.SEVERE, "parent already exists as file: " + path);
+            logger.log(Level.SEVERE, "file already exists, but we checked for existence: " + path);
         }
     }
 
-    private  FileAttribute<Set<PosixFilePermission>> prepareFileAttributes() {
-        Set<PosixFilePermission> perms = PosixFilePermissions.fromString("rw-r--r--");
-        return PosixFilePermissions.asFileAttribute(perms);
+    private Set<? extends OpenOption> prepareReadOptions(CopyOption... copyOptions) {
+        // ignore user copy options
+        return EnumSet.of(StandardOpenOption.READ);
     }
 
-    private Set<StandardOpenOption> prepareWriteOptions(CopyOption... copyOptions) {
-        Set<StandardOpenOption> options = null;
+    private Set<? extends OpenOption> prepareWriteOptions(CopyOption... copyOptions) {
+        Set<? extends OpenOption> options = null;
         for (CopyOption copyOption : copyOptions) {
             if (copyOption == StandardCopyOption.REPLACE_EXISTING) {
-                options = EnumSet.of(CREATE, WRITE);
+                options = EnumSet.of(StandardOpenOption.CREATE, StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING);
             }
         }
         if (options == null) {
-            options = EnumSet.of(CREATE_NEW, WRITE);
+            // we can not use CREATE_NEW, file is already there because of prepareForWrite() -> Files.createFile()
+            options = EnumSet.of(StandardOpenOption.CREATE, StandardOpenOption.WRITE);
         }
         return options;
     }

@@ -90,7 +90,7 @@ public interface ChannelDataReceiver extends Closeable {
      * </p>
      *
      * <p>
-     * In the SSH protocol, this method invocation is triggered by a <tt>SSH_MSG_CHANNEL_DATA</tt> message.
+     * In the SSH protocol, this method invocation is triggered by a {@code SSH_MSG_CHANNEL_DATA} message.
      * </p>
      *
      * @param channel The caller to which this {@link ChannelDataReceiver} is assigned. Never null.

@@ -6,7 +6,7 @@ package org.xbib.io.sshd.common.future;
 public interface CloseFuture extends SshFuture<CloseFuture> {
 
     /**
-     * @return <tt>true</tt> if the close request is finished and the target is closed.
+     * @return {@code true} if the close request is finished and the target is closed.
      */
     boolean isClosed();
 

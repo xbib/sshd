@@ -88,7 +88,7 @@ public final class ClientIdentity {
      *                      file whose key is to be loaded
      * @param options       The {@link LinkOption}s to apply when checking
      *                      for existence
-     * @return The updated <tt>client</tt> instance - provided a non-{@code null}
+     * @return The updated {@code client} instance - provided a non-{@code null}
      * {@link KeyPairProvider} was generated
      * @throws IOException              If failed to access the file system
      * @throws GeneralSecurityException If failed to load the keys
@@ -114,7 +114,7 @@ public final class ClientIdentity {
      *                      file whose key is to be loaded
      * @param options       The {@link LinkOption}s to apply when checking
      *                      for existence
-     * @return The updated <tt>client</tt> instance - provided a non-{@code null}
+     * @return The updated {@code client} instance - provided a non-{@code null}
      * {@link KeyPairProvider} was generated
      * @throws IOException              If failed to access the file system
      * @throws GeneralSecurityException If failed to load the keys

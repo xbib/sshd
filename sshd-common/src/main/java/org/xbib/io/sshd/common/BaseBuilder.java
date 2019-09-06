@@ -135,7 +135,7 @@ public class BaseBuilder<T extends AbstractFactoryManager, S extends BaseBuilder
      * instances of the {@link Cipher}s according to the preference
      * order defined by {@link #DEFAULT_CIPHERS_PREFERENCE}.
      * <B>Note:</B> the list may be filtered to exclude unsupported JCE
-     * ciphers according to the <tt>ignoreUnsupported</tt> parameter
+     * ciphers according to the {@code ignoreUnsupported} parameter
      * @see BuiltinCiphers#isSupported()
      */
     public static List<NamedFactory<Cipher>> setUpDefaultCiphers(boolean ignoreUnsupported) {
@@ -150,7 +150,7 @@ public class BaseBuilder<T extends AbstractFactoryManager, S extends BaseBuilder
      * instances of the {@link Mac}s according to the preference
      * order defined by {@link #DEFAULT_MAC_PREFERENCE}.
      * <B>Note:</B> the list may be filtered to exclude unsupported JCE
-     * MACs according to the <tt>ignoreUnsupported</tt> parameter
+     * MACs according to the {@code ignoreUnsupported} parameter
      * @see BuiltinMacs#isSupported()
      */
     public static List<NamedFactory<Mac>> setUpDefaultMacs(boolean ignoreUnsupported) {
@@ -165,7 +165,7 @@ public class BaseBuilder<T extends AbstractFactoryManager, S extends BaseBuilder
      * instances of the {@link Signature}s according to the preference
      * order defined by {@link #DEFAULT_SIGNATURE_PREFERENCE}.
      * <B>Note:</B> the list may be filtered to exclude unsupported JCE
-     * signatures according to the <tt>ignoreUnsupported</tt> parameter
+     * signatures according to the {@code ignoreUnsupported} parameter
      * @see BuiltinSignatures#isSupported()
      */
     public static List<NamedFactory<Signature>> setUpDefaultSignatures(boolean ignoreUnsupported) {

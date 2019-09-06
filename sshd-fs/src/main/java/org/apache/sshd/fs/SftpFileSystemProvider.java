@@ -454,8 +454,12 @@ public class SftpFileSystemProvider extends FileSystemProvider {
         if (modes.isEmpty()) {
             modes = EnumSet.of(SftpClient.OpenMode.Read, SftpClient.OpenMode.Write);
         }
-        // TODO: process file attributes
-        return new SftpFileSystemChannel(toSftpPath(path), modes);
+        SftpPath p = toSftpPath(path);
+        SftpFileSystemChannel channel = new SftpFileSystemChannel(p, modes);
+        for (FileAttribute<?> attr : attrs) {
+            setAttribute(p, attr.name(), attr.value());
+        }
+        return channel;
     }
 
     @Override

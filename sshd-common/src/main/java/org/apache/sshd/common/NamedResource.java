@@ -71,7 +71,7 @@ public interface NamedResource {
      * @param <R>       The generic resource type
      * @param name      Name of the resource - ignored if {@code null}/empty
      * @param c         The {@link Comparator} to decide whether the {@link NamedResource#getName()}
-     *                  matches the <tt>name</tt> parameter
+     *                  matches the {@code name} parameter
      * @param resources The {@link NamedResource} to check - ignored if {@code null}/empty
      * @return the removed resource from the list or {@code null} if not in the list
      */
@@ -87,7 +87,7 @@ public interface NamedResource {
      * @param <R>       The generic resource type
      * @param name      Name of the resource - ignored if {@code null}/empty
      * @param c         The {@link Comparator} to decide whether the {@link NamedResource#getName()}
-     *                  matches the <tt>name</tt> parameter
+     *                  matches the {@code name} parameter
      * @param resources The {@link NamedResource} to check - ignored if {@code null}/empty
      * @return The <U>first</U> resource whose name matches the parameter (by invoking
      * {@link Comparator#compare(Object, Object)} - {@code null} if no match found

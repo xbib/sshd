@@ -10,7 +10,7 @@ package org.xbib.io.sshd.common.future;
  */
 public interface SshFuture<T extends SshFuture> extends WaitableFuture {
     /**
-     * Adds an event <tt>listener</tt> which is notified when
+     * Adds an event {@code listener} which is notified when
      * this future is completed. If the listener is added
      * after the completion, the listener is directly notified.
      *
@@ -20,7 +20,7 @@ public interface SshFuture<T extends SshFuture> extends WaitableFuture {
     T addListener(SshFutureListener<T> listener);
 
     /**
-     * Removes an existing event <tt>listener</tt> so it won't be notified when
+     * Removes an existing event {@code listener} so it won't be notified when
      * the future is completed.
      *
      * @param listener The {@link SshFutureListener} instance to remove

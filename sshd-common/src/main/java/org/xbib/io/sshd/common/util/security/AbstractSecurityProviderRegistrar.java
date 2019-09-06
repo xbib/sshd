@@ -56,7 +56,7 @@ public abstract class AbstractSecurityProviderRegistrar
     /**
      * Attempts to see if a provider with this name already registered. If not,
      * then uses reflection API in order to load and instantiate the specified
-     * <tt>providerClassName</tt>
+     * {@code providerClassName}
      *
      * @param providerClassName The fully-qualified class name to instantiate
      *                          if a provider not already registered

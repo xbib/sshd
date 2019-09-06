@@ -34,7 +34,7 @@ public interface IoSession extends PacketWriter, Closeable {
      * Returns the value of the user-defined attribute of this session.
      *
      * @param key the key of the attribute
-     * @return <tt>null</tt> if there is no attribute with the specified key
+     * @return {@code null} if there is no attribute with the specified key
      */
     Object getAttribute(Object key);
 
@@ -43,7 +43,7 @@ public interface IoSession extends PacketWriter, Closeable {
      *
      * @param key   the key of the attribute
      * @param value the value of the attribute
-     * @return The old value of the attribute.  <tt>null</tt> if it is new.
+     * @return The old value of the attribute. {@code null} if it is new.
      */
     Object setAttribute(Object key, Object value);
 

@@ -1,8 +1,0 @@
-ext {
-    user = 'xbib'
-    projectName = 'sshd'
-    projectDescription = 'SSHD server and client library for Java and Groovy'
-    scmUrl = 'https://github.com/xbib/sshd'
-    scmConnection = 'scm:git:git://github.com/xbib/sshd.git'
-    scmDeveloperConnection = 'scm:git:git://github.com/xbib/sshd.git'
-}

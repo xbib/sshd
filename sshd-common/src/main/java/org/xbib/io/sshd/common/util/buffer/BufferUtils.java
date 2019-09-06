@@ -281,7 +281,7 @@ public final class BufferUtils {
      * @param off The offset of the data in the buffer
      * @param len The available data length. <B>Note:</B> if more than 4 bytes
      *            are available, then only the <U>first</U> 4 bytes in the buffer will be
-     *            used (starting at the specified <tt>offset</tt>)
+     *            used (starting at the specified {@code offset})
      * @return The result as a {@code long} whose 32 high-order bits are zero
      */
     public static long getUInt(byte[] buf, int off, int len) {

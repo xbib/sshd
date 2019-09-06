@@ -43,7 +43,7 @@ public final class ThreadUtils {
      * @param shutdownOnExit  If {@code true} then it is OK to shutdown the executor
      *                        so no wrapping takes place.
      * @return Either the original service or a wrapped one - depending on the
-     * value of the <tt>shutdownOnExit</tt> parameter
+     * value of the {@code shutdownOnExit} parameter
      */
     public static ExecutorService protectExecutorServiceShutdown(final ExecutorService executorService, boolean shutdownOnExit) {
         if (executorService == null || shutdownOnExit) {

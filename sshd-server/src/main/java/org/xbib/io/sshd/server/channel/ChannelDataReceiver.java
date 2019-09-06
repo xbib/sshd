@@ -42,7 +42,7 @@ public interface ChannelDataReceiver extends Closeable {
      * In either case, the callee must account for every bytes it receives in this method.
      * Returning 0 and failing to call back {@code channel.getLocalWindow().consumeAndCheck(len)} later
      * will dry up the window size, and eventually the client will stop sending you any data.
-     * In the SSH protocol, this method invocation is triggered by a <tt>SSH_MSG_CHANNEL_DATA</tt> message.
+     * In the SSH protocol, this method invocation is triggered by a {@code SSH_MSG_CHANNEL_DATA} message.
      *
      * @param channel The caller to which this {@link ChannelDataReceiver} is assigned. Never null.
      * @param buf     Holds the bytes received. This buffer belongs to the caller, and it might get reused

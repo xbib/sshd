@@ -248,7 +248,7 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
 
     /**
      * Retrieve the session from the MINA session.
-     * If the session has not been attached and <tt>allowNull</tt> is <code>false</code>,
+     * If the session has not been attached and {@code allowNull} is <code>false</code>,
      * an {@link IllegalStateException} will be thrown, else a {@code null} will
      * be returned
      *

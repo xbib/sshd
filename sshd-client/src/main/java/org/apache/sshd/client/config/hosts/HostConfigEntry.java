@@ -442,7 +442,7 @@ public class HostConfigEntry extends HostPatternsHolder implements MutableUserHo
      * @param ignoreAlreadyInitialized If {@code false} and one of the &quot;known&quot;
      * properties is encountered then throws an exception
      * @throws IllegalArgumentException If an existing value is overwritten and
-     * <tt>ignoreAlreadyInitialized</tt> is {@code false} (except for {@link #IDENTITY_FILE_CONFIG_PROP}
+     * {@code ignoreAlreadyInitialized} is {@code false} (except for {@link #IDENTITY_FILE_CONFIG_PROP}
      * which is <U>cumulative</U>
      * @see #HOST_NAME_CONFIG_PROP
      * @see #PORT_CONFIG_PROP

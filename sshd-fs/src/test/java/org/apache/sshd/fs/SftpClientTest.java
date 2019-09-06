@@ -19,6 +19,7 @@ import java.util.concurrent.TimeUnit;
 
 import static org.apache.sshd.common.subsystem.sftp.SftpConstants.SSH_FX_FAILURE;
 
+@Ignore
 public class SftpClientTest {
 
     @Test

@@ -57,7 +57,7 @@ public interface SftpFileSystemAccessor {
      * @param channel   The original {@link Channel} that was returned by {@link #openFile(ServerSession, SftpEventListenerManager, Path, String, Set, FileAttribute...)}
      * @param position  The position at which the locked region is to start - must be non-negative
      * @param size      The size of the locked region; must be non-negative, and the sum
-     *                  <tt>position</tt>&nbsp;+&nbsp;<tt>size</tt> must be non-negative
+     *                  {@code position}&nbsp;+&nbsp;{@code size} must be non-negative
      * @param shared    {@code true} to request a shared lock, {@code false} to request an exclusive lock
      * @return A lock object representing the newly-acquired lock, or {@code null}
      * if the lock could not be acquired because another program holds an overlapping lock

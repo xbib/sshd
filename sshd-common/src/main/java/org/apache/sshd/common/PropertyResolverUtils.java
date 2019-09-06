@@ -170,7 +170,7 @@ public final class PropertyResolverUtils {
      * @throws IllegalArgumentException If value is neither {@code null},
      * nor the enumerated type nor a {@link CharSequence}
      * @throws NoSuchElementException If no matching string name found and
-     * <tt>failIfNoMatch</tt> is {@code true}
+     * {@code failIfNoMatch} is {@code true}
      */
     public static <E extends Enum<E>> E toEnum(Class<E> enumType, Object value, boolean failIfNoMatch, Collection<E> available) {
         if (value == null) {
