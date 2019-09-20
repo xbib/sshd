@@ -18,17 +18,25 @@
  */
 package org.apache.sshd.common.io;
 
+import java.io.IOException;
 import java.net.SocketAddress;
 
 import org.apache.sshd.common.Closeable;
+import org.apache.sshd.common.util.net.ConnectionEndpointsIndicator;
 
-public interface IoSession extends PacketWriter, Closeable {
+public interface IoSession extends ConnectionEndpointsIndicator, PacketWriter, Closeable {
 
     /**
-     * @return a unique identifier for this session.  Every session has its own
-     * ID which is different from each other.
+     * @return a unique identifier for this session. Every session has its own
+     * ID which is different from any other.
      */
     long getId();
+
+    /**
+     * @return The service address through which this session was accepted - {@code null}
+     * if session was initiated by this peer instead of being accepted
+     */
+    SocketAddress getAcceptanceAddress();
 
     /**
      * Returns the value of the user-defined attribute of this session.
@@ -43,23 +51,44 @@ public interface IoSession extends PacketWriter, Closeable {
      *
      * @param key   the key of the attribute
      * @param value the value of the attribute
-     * @return The old value of the attribute. {@code null} if it is new.
+     * @return The old value of the attribute - {@code null} if it is new.
      */
     Object setAttribute(Object key, Object value);
 
     /**
-     * @return the socket address of remote peer.
+     * Sets a user defined attribute if the attribute with the specified key
+     * is not set yet. This method is same with the following code except
+     * that the operation is performed atomically.
+     * <pre><code>
+     * if (containsAttribute(key)) {
+     *     return getAttribute(key);
+     * } else {
+     *     return setAttribute(key, value);
+     * }
+     * </code></pre>
+     *
+     * @param key The key of the attribute we want to set
+     * @param value The value we want to set
+     * @return The old value of the attribute - {@code null} if not found.
      */
-    SocketAddress getRemoteAddress();
+    Object setAttributeIfAbsent(Object key, Object value);
 
     /**
-     * @return the socket address of local machine which is associated with this
-     * session.
+     * Removes a user-defined attribute with the specified key.
+     *
+     * @param key The key of the attribute we want to remove
+     * @return The old value of the attribute - {@code null} if not found.
      */
-    SocketAddress getLocalAddress();
+    Object removeAttribute(Object key);
 
     /**
      * @return the {@link IoService} that created this session.
      */
     IoService getService();
+
+    /**
+     * Handle received EOF.
+     * @throws IOException If failed to shutdown the stream
+     */
+    void shudownOutputStream() throws IOException;
 }

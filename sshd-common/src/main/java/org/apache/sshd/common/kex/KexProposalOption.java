@@ -46,7 +46,7 @@ public enum KexProposalOption {
      * Compares values according to {@link KexProposalOption#getProposalIndex()}
      */
     public static final Comparator<KexProposalOption> BY_PROPOSAL_INDEX =
-            Comparator.comparingInt(KexProposalOption::getProposalIndex);
+        Comparator.comparingInt(KexProposalOption::getProposalIndex);
 
     /**
      * A {@link List} of all the options <U>sorted</U> according to {@link #getProposalIndex()}
@@ -55,9 +55,10 @@ public enum KexProposalOption {
      */
     public static final List<KexProposalOption> VALUES =
         Collections.unmodifiableList(
-                EnumSet.allOf(KexProposalOption.class).stream()
-                        .sorted(BY_PROPOSAL_INDEX)
-                        .collect(Collectors.toList()));
+            EnumSet.allOf(KexProposalOption.class)
+                .stream()
+                .sorted(BY_PROPOSAL_INDEX)
+                .collect(Collectors.toList()));
 
     public static final int PROPOSAL_MAX = VALUES.size();
 
@@ -123,5 +124,9 @@ public enum KexProposalOption {
         public static final int PROPOSAL_COMP_ALGS_STOC = 7;
         public static final int PROPOSAL_LANG_CTOS = 8;
         public static final int PROPOSAL_LANG_STOC = 9;
+
+        private Constants() {
+            throw new UnsupportedOperationException("No instance allowed");
+        }
     }
 }

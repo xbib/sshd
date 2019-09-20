@@ -40,7 +40,7 @@ public enum TimeValueConfig {
     WEEKS('w', 'W', TimeUnit.DAYS.toMillis(7L));
 
     public static final Set<TimeValueConfig> VALUES =
-            Collections.unmodifiableSet(EnumSet.allOf(TimeValueConfig.class));
+        Collections.unmodifiableSet(EnumSet.allOf(TimeValueConfig.class));
 
     private final char loChar;
     private final char hiChar;
@@ -115,7 +115,7 @@ public enum TimeValueConfig {
 
             TimeValueConfig c = fromValueChar(ch);
             if (c == null) {
-                throw new IllegalArgumentException("parse(" + s + ") unknown time value character: " + String.valueOf(ch));
+                throw new IllegalArgumentException("parse(" + s + ") unknown time value character: '" + ch + "'");
             }
 
             String v = s.substring(lastPos, curPos);

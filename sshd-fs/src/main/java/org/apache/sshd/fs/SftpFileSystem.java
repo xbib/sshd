@@ -18,18 +18,6 @@
  */
 package org.apache.sshd.fs;
 
-import org.apache.sshd.client.session.ClientSession;
-import org.apache.sshd.client.session.ClientSessionHolder;
-import org.apache.sshd.client.subsystem.sftp.RawSftpClient;
-import org.apache.sshd.client.subsystem.sftp.SftpClient;
-import org.apache.sshd.client.subsystem.sftp.SftpVersionSelector;
-import org.apache.sshd.client.subsystem.sftp.AbstractSftpClient;
-import org.apache.sshd.common.channel.ClientChannel;
-import org.apache.sshd.common.file.util.BaseFileSystem;
-import org.apache.sshd.common.subsystem.sftp.SftpConstants;
-import org.apache.sshd.common.util.GenericUtils;
-import org.apache.sshd.common.util.buffer.Buffer;
-
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -44,6 +32,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.NavigableMap;
+import java.util.NavigableSet;
 import java.util.Objects;
 import java.util.Queue;
 import java.util.Set;
@@ -51,17 +40,28 @@ import java.util.TreeSet;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import org.apache.sshd.client.channel.ClientChannel;
+import org.apache.sshd.client.session.ClientSession;
+import org.apache.sshd.client.session.ClientSessionHolder;
+import org.apache.sshd.client.subsystem.sftp.RawSftpClient;
+import org.apache.sshd.client.subsystem.sftp.SftpClient;
+import org.apache.sshd.client.subsystem.sftp.SftpVersionSelector;
+import org.apache.sshd.common.file.util.BaseFileSystem;
+import org.apache.sshd.common.subsystem.sftp.SftpConstants;
+import org.apache.sshd.common.util.GenericUtils;
+import org.apache.sshd.common.util.buffer.Buffer;
+
 public class SftpFileSystem extends BaseFileSystem<SftpPath> implements ClientSessionHolder {
     public static final String POOL_SIZE_PROP = "sftp-fs-pool-size";
-    public static final int DEFAULT_POOL_SIZE = 1;
+    public static final int DEFAULT_POOL_SIZE = 8;
 
-    public static final Set<String> UNIVERSAL_SUPPORTED_VIEWS =
-            Collections.unmodifiableSet(
-                    GenericUtils.asSortedSet(String.CASE_INSENSITIVE_ORDER,
-                            "basic", "posix", "owner"));
+    public static final NavigableSet<String> UNIVERSAL_SUPPORTED_VIEWS =
+        Collections.unmodifiableNavigableSet(
+            GenericUtils.asSortedSet(String.CASE_INSENSITIVE_ORDER, "basic", "posix", "owner"));
 
     private final String id;
     private final ClientSession clientSession;
+    private final SftpClientFactory factory;
     private final SftpVersionSelector selector;
     private final Queue<SftpClient> pool;
     private final ThreadLocal<Wrapper> wrappers = new ThreadLocal<>();
@@ -72,11 +72,14 @@ public class SftpFileSystem extends BaseFileSystem<SftpPath> implements ClientSe
     private int writeBufferSize = SftpClient.DEFAULT_WRITE_BUFFER_SIZE;
     private final List<FileStore> stores;
 
-    public SftpFileSystem(SftpFileSystemProvider provider, String id, ClientSession session, SftpVersionSelector selector)
-            throws IOException {
+    public SftpFileSystem(
+            SftpFileSystemProvider provider, String id, ClientSession session,
+            SftpClientFactory factory, SftpVersionSelector selector)
+                throws IOException {
         super(provider);
         this.id = id;
         this.clientSession = Objects.requireNonNull(session, "No client session");
+        this.factory = factory != null ? factory : SftpClientFactory.instance();
         this.selector = selector;
         this.stores = Collections.unmodifiableList(Collections.<FileStore>singletonList(new SftpFileStore(id, this)));
         this.pool = new LinkedBlockingQueue<>(session.getIntProperty(POOL_SIZE_PROP, DEFAULT_POOL_SIZE));
@@ -159,7 +162,7 @@ public class SftpFileSystem extends BaseFileSystem<SftpPath> implements ClientSe
                 SftpClient client = pool.poll();
                 if (client == null) {
                     ClientSession session = getClientSession();
-                    client = session.createSftpClient(getSftpVersionSelector());
+                    client = factory.createSftpClient(session, getSftpVersionSelector());
                 }
                 if (!client.isClosing()) {
                     wrapper = new Wrapper(client, getReadBufferSize(), getWriteBufferSize());
@@ -184,12 +187,6 @@ public class SftpFileSystem extends BaseFileSystem<SftpPath> implements ClientSe
             if ((fs != null) && (fs != this)) {
                 throw new FileSystemException(fsId, fsId, "Mismatched FS instance for id=" + fsId);
             }
-            for (SftpClient client : pool) {
-                if (client != null) {
-                    client.close();
-                }
-            }
-            pool.clear();
         }
     }
 
@@ -216,11 +213,10 @@ public class SftpFileSystem extends BaseFileSystem<SftpPath> implements ClientSe
 
     @Override
     public String toString() {
-        return getClass().getSimpleName() + "[" + String.valueOf(getClientSession()) + "]";
+        return getClass().getSimpleName() + "[" + getClientSession() + "]";
     }
 
     private final class Wrapper extends AbstractSftpClient {
-
         private final SftpClient delegate;
         private final AtomicInteger count = new AtomicInteger(1);
         private final int readSize;
@@ -599,7 +595,6 @@ public class SftpFileSystem extends BaseFileSystem<SftpPath> implements ClientSe
     }
 
     public static class DefaultGroupPrincipal extends DefaultUserPrincipal implements GroupPrincipal {
-
         public DefaultGroupPrincipal(String name) {
             super(name);
         }

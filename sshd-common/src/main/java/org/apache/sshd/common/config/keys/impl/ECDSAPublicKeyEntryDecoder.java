@@ -35,11 +35,14 @@ import java.security.spec.ECPoint;
 import java.security.spec.ECPrivateKeySpec;
 import java.security.spec.ECPublicKeySpec;
 import java.security.spec.InvalidKeySpecException;
+import java.util.Map;
 import java.util.Objects;
 
 import org.apache.sshd.common.cipher.ECCurves;
+import org.apache.sshd.common.config.keys.IdentityResourceLoader;
 import org.apache.sshd.common.config.keys.KeyEntryResolver;
 import org.apache.sshd.common.config.keys.KeyUtils;
+import org.apache.sshd.common.session.SessionContext;
 import org.apache.sshd.common.util.buffer.BufferUtils;
 import org.apache.sshd.common.util.security.SecurityUtils;
 
@@ -47,6 +50,9 @@ import org.apache.sshd.common.util.security.SecurityUtils;
  * @author <a href="mailto:dev@mina.apache.org">Apache MINA SSHD Project</a>
  */
 public class ECDSAPublicKeyEntryDecoder extends AbstractPublicKeyEntryDecoder<ECPublicKey, ECPrivateKey> {
+    public static final int MAX_ALLOWED_POINT_SIZE = IdentityResourceLoader.MAX_BIGINT_OCTETS_COUNT;
+    public static final int MAX_CURVE_NAME_LENGTH = 1024;
+
     public static final ECDSAPublicKeyEntryDecoder INSTANCE = new ECDSAPublicKeyEntryDecoder();
 
     // see rfc5480 section 2.2
@@ -59,7 +65,9 @@ public class ECDSAPublicKeyEntryDecoder extends AbstractPublicKeyEntryDecoder<EC
     }
 
     @Override
-    public ECPublicKey decodePublicKey(String keyType, InputStream keyData) throws IOException, GeneralSecurityException {
+    public ECPublicKey decodePublicKey(
+            SessionContext session, String keyType, InputStream keyData, Map<String, String> headers)
+                throws IOException, GeneralSecurityException {
         ECCurves curve = ECCurves.fromKeyType(keyType);
         if (curve == null) {
             throw new InvalidKeySpecException("Not an EC curve name: " + keyType);
@@ -71,12 +79,12 @@ public class ECDSAPublicKeyEntryDecoder extends AbstractPublicKeyEntryDecoder<EC
 
         String keyCurveName = curve.getName();
         // see rfc5656 section 3.1
-        String encCurveName = KeyEntryResolver.decodeString(keyData);
+        String encCurveName = KeyEntryResolver.decodeString(keyData, MAX_CURVE_NAME_LENGTH);
         if (!keyCurveName.equals(encCurveName)) {
             throw new InvalidKeySpecException("Mismatched key curve name (" + keyCurveName + ") vs. encoded one (" + encCurveName + ")");
         }
 
-        byte[] octets = KeyEntryResolver.readRLEBytes(keyData);
+        byte[] octets = KeyEntryResolver.readRLEBytes(keyData, MAX_ALLOWED_POINT_SIZE);
         ECPoint w;
         try {
             w = ECCurves.octetStringToEcPoint(octets);

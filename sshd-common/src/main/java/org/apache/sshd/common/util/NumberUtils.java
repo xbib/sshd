@@ -23,7 +23,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
-import java.util.stream.IntStream;
 
 /**
  * @author <a href="mailto:dev@mina.apache.org">Apache MINA SSHD Project</a>
@@ -34,46 +33,32 @@ public final class NumberUtils {
      * primitive numerical values
      */
     public static final List<Class<?>> NUMERIC_PRIMITIVE_CLASSES =
-            GenericUtils.unmodifiableList(
-                        Byte.TYPE, Short.TYPE, Integer.TYPE, Long.TYPE,
-                        Float.TYPE, Double.TYPE
-                    );
-
-    /**
-     * A {@link List} containing all the pure powers of 2 for a {@code long}
-     * value. The value at index <I>n</I> is 2 to the power of <I>n</I>
-     */
-    public static final List<Long> POWERS_OF_TWO =
-            GenericUtils.unmodifiableList(IntStream.range(0, 64)
-                    .mapToObj(i -> 1L << i));
+        GenericUtils.unmodifiableList(
+            Byte.TYPE, Short.TYPE, Integer.TYPE, Long.TYPE, Float.TYPE, Double.TYPE);
 
     private NumberUtils() {
         throw new UnsupportedOperationException("No instance");
     }
 
-    public static boolean isPowerOf2(long value) {
-        for (Long l : POWERS_OF_TWO) {
-            if (value == l) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    public static long getNextPowerOf2(long value) {
-        long j = 1L;
-        while (j < value) {
-            j <<= 1;
-        }
-        return j;
-    }
-
+    /**
+     * @param value The original (non-negative) value
+     * @return The closest <U>positive</U> power of 2 that is greater or equal to the value.
+     * If none can be found then returns the original value
+     */
     public static int getNextPowerOf2(int value) {
+        if (value < 0) {
+            throw new IllegalArgumentException("Negative value N/A: " + value);
+        }
+
         int j = 1;
         while (j < value) {
             j <<= 1;
+            // Did we stumble onto the realm of values beyond 2GB ?
+            if (j <= 0) {
+                return value;
+            }
         }
+
         return j;
     }
 
@@ -245,6 +230,10 @@ public final class NumberUtils {
         return sb.toString();
     }
 
+    public static byte[] emptyIfNull(byte[] a) {
+        return (a == null) ? GenericUtils.EMPTY_BYTE_ARRAY : a;
+    }
+
     public static boolean isEmpty(byte[] a) {
         return NumberUtils.length(a) <= 0;
     }
@@ -258,15 +247,15 @@ public final class NumberUtils {
     }
 
     public static int length(byte... a) {
-        return a == null ? 0 : a.length;
+        return (a == null) ? 0 : a.length;
     }
 
     public static int length(int... a) {
-        return a == null ? 0 : a.length;
+        return (a == null) ? 0 : a.length;
     }
 
     public static int length(long... a) {
-        return a == null ? 0 : a.length;
+        return (a == null) ? 0 : a.length;
     }
 
     public static List<Integer> asList(int... values) {
@@ -293,8 +282,8 @@ public final class NumberUtils {
             return false;
         }
 
-        for (int index = 0; index < cs.length(); index++) {
-            char c = cs.charAt(0);
+        for (int index = 0, len = cs.length(); index < len; index++) {
+            char c = cs.charAt(index);
             if ((c >= '0') && (c <= '9')) {
                 continue;
             }

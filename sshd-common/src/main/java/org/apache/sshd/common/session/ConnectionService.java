@@ -20,13 +20,11 @@ package org.apache.sshd.common.session;
 
 import java.io.IOException;
 
-import org.apache.sshd.common.agent.AgentForwardSupport;
 import org.apache.sshd.common.Service;
 import org.apache.sshd.common.channel.Channel;
 import org.apache.sshd.common.forward.ForwardingFilter;
 import org.apache.sshd.common.forward.PortForwardingEventListenerManager;
 import org.apache.sshd.common.forward.PortForwardingEventListenerManagerHolder;
-import org.apache.sshd.common.x11.X11ForwardSupport;
 
 /**
  * Interface implementing ssh-connection service.
@@ -35,6 +33,7 @@ import org.apache.sshd.common.x11.X11ForwardSupport;
  */
 public interface ConnectionService
         extends Service,
+        SessionHeartbeatController,
         UnknownChannelReferenceHandlerManager,
         PortForwardingEventListenerManager,
         PortForwardingEventListenerManagerHolder {
@@ -61,12 +60,6 @@ public interface ConnectionService
      * @return The {@link ForwardingFilter}
      */
     ForwardingFilter getForwardingFilter();
-
-    // TODO: remove from interface, it's server side only
-    AgentForwardSupport getAgentForwardSupport();
-
-    // TODO: remove from interface, it's server side only
-    X11ForwardSupport getX11ForwardSupport();
 
     boolean isAllowMoreSessions();
 

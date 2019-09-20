@@ -38,12 +38,10 @@ import org.apache.sshd.common.util.buffer.Buffer;
 import org.apache.sshd.common.util.buffer.ByteArrayBuffer;
 import org.apache.sshd.common.util.security.SecurityUtils;
 
-
 /**
  * @author <a href="mailto:dev@mina.apache.org">Apache MINA SSHD Project</a>
  */
 public class DHGEXClient extends AbstractDHClientKeyExchange {
-
     protected final DHFactory factory;
     protected byte expected;
     protected int min = SecurityUtils.MIN_DHGEX_KEY_SIZE;
@@ -64,7 +62,7 @@ public class DHGEXClient extends AbstractDHClientKeyExchange {
         return factory.getName();
     }
 
-    public static KeyExchangeFactory newFactory(final DHFactory delegate) {
+    public static KeyExchangeFactory newFactory(DHFactory delegate) {
         return new KeyExchangeFactory() {
             @Override
             public String getName() {
@@ -79,8 +77,8 @@ public class DHGEXClient extends AbstractDHClientKeyExchange {
             @Override
             public String toString() {
                 return NamedFactory.class.getSimpleName()
-                        + "<" + KeyExchange.class.getSimpleName() + ">"
-                        + "[" + getName() + "]";
+                    + "<" + KeyExchange.class.getSimpleName() + ">"
+                    + "[" + getName() + "]";
             }
         };
     }
@@ -101,16 +99,19 @@ public class DHGEXClient extends AbstractDHClientKeyExchange {
     }
 
     @Override
+    @SuppressWarnings("checkstyle:VariableDeclarationUsageDistance")
     public boolean next(int cmd, Buffer buffer) throws Exception {
         Session session = getSession();
-        if (log.isDebugEnabled()) {
-            log.debug("next({})[{}] process command={}", this, session, KeyExchange.getGroupKexOpcodeName(cmd));
+        boolean debugEnabled = log.isDebugEnabled();
+        if (debugEnabled) {
+            log.debug("next({})[{}] process command={}",
+                this, session, KeyExchange.getGroupKexOpcodeName(cmd));
         }
 
         if (cmd != expected) {
             throw new SshException(SshConstants.SSH2_DISCONNECT_KEY_EXCHANGE_FAILED,
-                    "Protocol error: expected packet " + KeyExchange.getGroupKexOpcodeName(expected)
-                  + ", got " + KeyExchange.getGroupKexOpcodeName(cmd));
+                "Protocol error: expected packet " + KeyExchange.getGroupKexOpcodeName(expected)
+              + ", got " + KeyExchange.getGroupKexOpcodeName(cmd));
         }
 
         if (cmd == SshConstants.SSH_MSG_KEX_DH_GEX_GROUP) {
@@ -122,10 +123,11 @@ public class DHGEXClient extends AbstractDHClientKeyExchange {
             hash.init();
             e = dh.getE();
 
-            if (log.isDebugEnabled()) {
+            if (debugEnabled) {
                 log.debug("next({})[{}] Send SSH_MSG_KEX_DH_GEX_INIT", this, session);
             }
-            buffer = session.createBuffer(SshConstants.SSH_MSG_KEX_DH_GEX_INIT, e.length + Byte.SIZE);
+            buffer = session.createBuffer(
+                SshConstants.SSH_MSG_KEX_DH_GEX_INIT, e.length + Byte.SIZE);
             buffer.putMPInt(e);
             session.writePacket(buffer);
             expected = SshConstants.SSH_MSG_KEX_DH_GEX_REPLY;
@@ -141,7 +143,8 @@ public class DHGEXClient extends AbstractDHClientKeyExchange {
 
             buffer = new ByteArrayBuffer(k_s);
             serverKey = buffer.getRawPublicKey();
-            final String keyAlg = KeyUtils.getKeyType(serverKey);
+
+            String keyAlg = KeyUtils.getKeyType(serverKey);
             if (GenericUtils.isEmpty(keyAlg)) {
                 throw new SshException("Unsupported server key type");
             }
@@ -164,14 +167,13 @@ public class DHGEXClient extends AbstractDHClientKeyExchange {
             h = hash.digest();
 
             Signature verif = ValidateUtils.checkNotNull(
-                    NamedFactory.create(session.getSignatureFactories(), keyAlg),
-                    "No verifier located for algorithm=%s",
-                    keyAlg);
+                NamedFactory.create(session.getSignatureFactories(), keyAlg),
+                "No verifier located for algorithm=%s", keyAlg);
             verif.initVerifier(serverKey);
             verif.update(h);
             if (!verif.verify(sig)) {
                 throw new SshException(SshConstants.SSH2_DISCONNECT_KEY_EXCHANGE_FAILED,
-                        "KeyExchange signature verification failed for key type=" + keyAlg);
+                    "KeyExchange signature verification failed for key type=" + keyAlg);
             }
             return true;
         }

@@ -1,4 +1,2 @@
 org.apache.sshd.fs.SftpFileSystemProvider
 org.apache.sshd.common.file.root.RootedFileSystemProvider
-#org.xbib.io.sshd.fs.SftpFileSystemProvider
-#org.xbib.io.sshd.common.file.root.RootedFileSystemProvider

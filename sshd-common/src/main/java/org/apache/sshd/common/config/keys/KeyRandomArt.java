@@ -31,9 +31,12 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Objects;
 
+import org.apache.sshd.common.AlgorithmNameProvider;
 import org.apache.sshd.common.Factory;
 import org.apache.sshd.common.digest.Digest;
 import org.apache.sshd.common.keyprovider.KeyIdentityProvider;
+import org.apache.sshd.common.keyprovider.KeySizeIndicator;
+import org.apache.sshd.common.session.SessionContext;
 import org.apache.sshd.common.util.GenericUtils;
 import org.apache.sshd.common.util.ValidateUtils;
 
@@ -51,7 +54,7 @@ import org.apache.sshd.common.util.ValidateUtils;
  * @see <a href="http://sparrow.ece.cmu.edu/~adrian/projects/validation/validation.pdf">Original article</a>
  * @see <a href="http://opensource.apple.com/source/OpenSSH/OpenSSH-175/openssh/key.c">C implementation</a>
  */
-public class KeyRandomArt {
+public class KeyRandomArt implements AlgorithmNameProvider, KeySizeIndicator {
     public static final int FLDBASE = 8;
     public static final int FLDSIZE_Y = FLDBASE + 1;
     public static final int FLDSIZE_X = FLDBASE * 2 + 1;
@@ -116,10 +119,16 @@ public class KeyRandomArt {
         field[x][y] = (char) len;
     }
 
+    /**
+     * @return The algorithm that was used to generate the key - e.g.,
+     * &quot;RSA&quot;, &quot;DSA&quot;, &quot;EC&quot;.
+     */
+    @Override
     public String getAlgorithm() {
         return algorithm;
     }
 
+    @Override
     public int getKeySize() {
         return keySize;
     }
@@ -197,22 +206,28 @@ public class KeyRandomArt {
     /**
      * Creates the combined representation of the random art entries for the provided keys
      *
+     * @param session The {@link SessionContext} for invoking this load command - may
+     * be {@code null} if not invoked within a session context (e.g., offline tool or session unknown).
      * @param separator The separator to use between the arts - if empty char
      * ('\0') then no separation is done
      * @param provider The {@link KeyIdentityProvider} - ignored if {@code null}
      * or has no keys to provide
      * @return The combined representation
      * @throws Exception If failed to extract or combine the entries
-     * @see #combine(Appendable, char, KeyIdentityProvider)
+     * @see #combine(SessionContext, Appendable, char, KeyIdentityProvider)
      */
-    public static String combine(char separator, KeyIdentityProvider provider) throws Exception {
-        return combine(new StringBuilder(4 * (FLDSIZE_X + 4) * (FLDSIZE_Y + 3)), separator, provider).toString();
+    public static String combine(
+            SessionContext session, char separator, KeyIdentityProvider provider)
+                throws Exception {
+        return combine(session, new StringBuilder(4 * (FLDSIZE_X + 4) * (FLDSIZE_Y + 3)), separator, provider).toString();
     }
 
     /**
      * Appends the combined random art entries for the provided keys
      *
      * @param <A> The {@link Appendable} output writer
+     * @param session The {@link SessionContext} for invoking this load command - may
+     * be {@code null} if not invoked within a session context (e.g., offline tool or session unknown).
      * @param sb The writer
      * @param separator The separator to use between the arts - if empty char
      * ('\0') then no separation is done
@@ -220,24 +235,29 @@ public class KeyRandomArt {
      * or has no keys to provide
      * @return The updated writer instance
      * @throws Exception If failed to extract or write the entries
-     * @see #generate(KeyIdentityProvider)
+     * @see #generate(SessionContext, KeyIdentityProvider)
      * @see #combine(Appendable, char, Collection)
      */
-    public static <A extends Appendable> A combine(A sb, char separator, KeyIdentityProvider provider) throws Exception {
-        return combine(sb, separator, generate(provider));
+    public static <A extends Appendable> A combine(
+            SessionContext session, A sb, char separator, KeyIdentityProvider provider) throws Exception {
+        return combine(sb, separator, generate(session, provider));
     }
 
     /**
      * Extracts and generates random art entries for all key in the provider
      *
+     * @param session The {@link SessionContext} for invoking this load command - may
+     * be {@code null} if not invoked within a session context (e.g., offline tool or session unknown).
      * @param provider The {@link KeyIdentityProvider} - ignored if {@code null}
      * or has no keys to provide
      * @return The extracted {@link KeyRandomArt}s
      * @throws Exception If failed to extract the entries
-     * @see KeyIdentityProvider#loadKeys()
+     * @see KeyIdentityProvider#loadKeys(SessionContext)
      */
-    public static Collection<KeyRandomArt> generate(KeyIdentityProvider provider) throws Exception {
-        Iterable<KeyPair> keys = (provider == null) ? null : provider.loadKeys();
+    public static Collection<KeyRandomArt> generate(
+            SessionContext session, KeyIdentityProvider provider)
+                throws Exception {
+        Iterable<KeyPair> keys = (provider == null) ? null : provider.loadKeys(session);
         Iterator<KeyPair> iter = (keys == null) ? null : keys.iterator();
         if ((iter == null) || (!iter.hasNext())) {
             return Collections.emptyList();
@@ -248,7 +268,7 @@ public class KeyRandomArt {
             KeyPair kp = iter.next();
             KeyRandomArt a = new KeyRandomArt(kp.getPublic());
             arts.add(a);
-        } while(iter.hasNext());
+        } while (iter.hasNext());
 
         return arts;
     }

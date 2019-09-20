@@ -21,8 +21,8 @@ package org.apache.sshd.client.session;
 
 /**
  * Provides a way to implement proxied connections where some metadata
- * about the client is sent before the actual SSH protocol is
- * executed - e.g., the <a href="http://www.haproxy.org/download/1.6/doc/proxy-protocol.txt">PROXY protocol"</a>.
+ * about the client is sent <U>before</U> the actual SSH protocol is
+ * executed - e.g., the {@code http://www.haproxy.org/download/1.6/doc/proxy-protocol.txt} PROXY protocol.
  * The implementor should use the {@code IoSession#write(Buffer)} method
  * to send any packets with the meta-data.
  *
@@ -31,13 +31,15 @@ package org.apache.sshd.client.session;
 @FunctionalInterface
 public interface ClientProxyConnector {
     /**
-     * Invoked just before the client identification is sent so that the
-     * proxy can send the meta-data to its peer. Upon successful return
-     * the SSH identification line is sent and the protocol proceeds as usual.
+     * Invoked once initial connection has been established so that the proxy can open
+     * its channel and send the meta-data to its peer. Upon successful return the SSH
+     * identification line is eventually sent and the protocol proceeds as usual.
      *
-     * @param session The {@link ClientSession} instance
-     * @throws Exception If failed to send the data - which will also
+     * @param session The {@link ClientSession} instance - <B>Note:</B> at this stage
+     * the client's identification line is not set yet.
+     * @throws Exception If failed to initialize the proxy - which will also
      * terminate the session
+     * @see org.apache.sshd.client.ClientFactoryManager#SEND_IMMEDIATE_IDENTIFICATION SEND_IMMEDIATE_IDENTIFICATION
      */
     void sendClientProxyMetadata(ClientSession session) throws Exception;
 }

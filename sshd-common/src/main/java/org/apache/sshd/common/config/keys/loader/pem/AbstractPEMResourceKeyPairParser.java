@@ -22,21 +22,28 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.StreamCorruptedException;
+import java.net.ProtocolException;
 import java.security.GeneralSecurityException;
 import java.security.KeyPair;
 import java.security.NoSuchAlgorithmException;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
 
 import javax.security.auth.login.CredentialException;
 import javax.security.auth.login.FailedLoginException;
 
+import org.apache.sshd.common.NamedResource;
 import org.apache.sshd.common.config.keys.FilePasswordProvider;
+import org.apache.sshd.common.config.keys.FilePasswordProvider.ResourceDecodeResult;
 import org.apache.sshd.common.config.keys.loader.AbstractKeyPairResourceParser;
 import org.apache.sshd.common.config.keys.loader.KeyPairResourceParser;
 import org.apache.sshd.common.config.keys.loader.PrivateKeyEncryptionContext;
 import org.apache.sshd.common.config.keys.loader.PrivateKeyObfuscator;
+import org.apache.sshd.common.session.SessionContext;
 import org.apache.sshd.common.util.GenericUtils;
 import org.apache.sshd.common.util.ValidateUtils;
 import org.apache.sshd.common.util.buffer.BufferUtils;
@@ -52,7 +59,8 @@ public abstract class AbstractPEMResourceKeyPairParser
     private final String algo;
     private final String algId;
 
-    protected AbstractPEMResourceKeyPairParser(String algo, String algId, List<String> beginners, List<String> enders) {
+    protected AbstractPEMResourceKeyPairParser(
+            String algo, String algId, List<String> beginners, List<String> enders) {
         super(beginners, enders);
         this.algo = ValidateUtils.checkNotNullAndNotEmpty(algo, "No encryption algorithm provided");
         this.algId = ValidateUtils.checkNotNullAndNotEmpty(algId, "No algorithm identifier provided");
@@ -70,8 +78,11 @@ public abstract class AbstractPEMResourceKeyPairParser
 
     @Override
     public Collection<KeyPair> extractKeyPairs(
-            String resourceKey, String beginMarker, String endMarker, FilePasswordProvider passwordProvider, List<String> lines)
-                    throws IOException, GeneralSecurityException {
+            SessionContext session, NamedResource resourceKey,
+            String beginMarker, String endMarker,
+            FilePasswordProvider passwordProvider,
+            List<String> lines, Map<String, String> headers)
+                throws IOException, GeneralSecurityException {
         if (GenericUtils.isEmpty(lines)) {
             return Collections.emptyList();
         }
@@ -80,6 +91,7 @@ public abstract class AbstractPEMResourceKeyPairParser
         byte[] initVector = null;
         String algInfo = null;
         int dataStartIndex = -1;
+        boolean hdrsAvailable = GenericUtils.isNotEmpty(headers);
         for (int index = 0; index < lines.size(); index++) {
             String line = GenericUtils.trimToEmpty(lines.get(index));
             if (GenericUtils.isEmpty(line)) {
@@ -93,28 +105,36 @@ public abstract class AbstractPEMResourceKeyPairParser
                 break;
             }
 
-            if (line.startsWith("Proc-Type:")) {
+            String hdrName = line.substring(0, headerPos).trim();
+            String hdrValue = line.substring(headerPos + 1).trim();
+            if (!hdrsAvailable) {
+                Map<String, String> accHeaders = GenericUtils.isEmpty(headers)
+                    ? new TreeMap<>(String.CASE_INSENSITIVE_ORDER)
+                    : headers;
+                accHeaders.put(hdrName, hdrValue);
+            }
+
+            if (hdrName.equalsIgnoreCase("Proc-Type")) {
                 if (encrypted != null) {
                     throw new StreamCorruptedException("Multiple encryption indicators in " + resourceKey);
                 }
 
-                line = line.substring(headerPos + 1).trim();
-                line = line.toUpperCase();
+                hdrValue = hdrValue.toUpperCase();
                 encrypted = Boolean.valueOf(line.contains("ENCRYPTED"));
-            } else if (line.startsWith("DEK-Info:")) {
+            } else if (hdrName.equalsIgnoreCase("DEK-Info")) {
                 if ((initVector != null) || (algInfo != null)) {
                     throw new StreamCorruptedException("Multiple encryption settings in " + resourceKey);
                 }
 
-                line = line.substring(headerPos + 1).trim();
-                headerPos = line.indexOf(',');
-                if (headerPos < 0) {
-                    throw new StreamCorruptedException(resourceKey + ": Missing encryption data values separator in line '" + line + "'");
+                int infoPos = hdrValue.indexOf(',');
+                if (infoPos < 0) {
+                    throw new StreamCorruptedException(
+                        resourceKey + ": Missing encryption data values separator in line '" + line + "'");
                 }
 
-                algInfo = line.substring(0, headerPos).trim();
+                algInfo = hdrValue.substring(0, infoPos).trim();
 
-                String algInitVector = line.substring(headerPos + 1).trim();
+                String algInitVector = hdrValue.substring(infoPos + 1).trim();
                 initVector = BufferUtils.decodeHex(BufferUtils.EMPTY_HEX_SEPARATOR, algInitVector);
             }
         }
@@ -129,25 +149,62 @@ public abstract class AbstractPEMResourceKeyPairParser
                 throw new CredentialException("Missing password provider for encrypted resource=" + resourceKey);
             }
 
-            String password = passwordProvider.getPassword(resourceKey);
-            if (GenericUtils.isEmpty(password)) {
-                throw new FailedLoginException("No password data for encrypted resource=" + resourceKey);
-            }
+            for (int retryIndex = 0;; retryIndex++) {
+                String password = passwordProvider.getPassword(session, resourceKey, retryIndex);
+                Collection<KeyPair> keys;
+                try {
+                    if (GenericUtils.isEmpty(password)) {
+                        throw new FailedLoginException("No password data for encrypted resource=" + resourceKey);
+                    }
 
-            PrivateKeyEncryptionContext encContext = new PrivateKeyEncryptionContext(algInfo);
-            encContext.setPassword(password);
-            encContext.setInitVector(initVector);
-            byte[] encryptedData = KeyPairResourceParser.extractDataBytes(dataLines);
-            byte[] decodedData = applyPrivateKeyCipher(encryptedData, encContext, false);
-            try (InputStream bais = new ByteArrayInputStream(decodedData)) {
-                return extractKeyPairs(resourceKey, beginMarker, endMarker, passwordProvider, bais);
+                    PrivateKeyEncryptionContext encContext = new PrivateKeyEncryptionContext(algInfo);
+                    encContext.setPassword(password);
+                    encContext.setInitVector(initVector);
+
+                    byte[] encryptedData = GenericUtils.EMPTY_BYTE_ARRAY;
+                    byte[] decodedData = GenericUtils.EMPTY_BYTE_ARRAY;
+                    try {
+                        encryptedData = KeyPairResourceParser.extractDataBytes(dataLines);
+                        decodedData = applyPrivateKeyCipher(encryptedData, encContext, false);
+                        try (InputStream bais = new ByteArrayInputStream(decodedData)) {
+                            keys = extractKeyPairs(session, resourceKey, beginMarker, endMarker, passwordProvider, bais, headers);
+                        }
+                    } finally {
+                        Arrays.fill(encryptedData, (byte) 0); // get rid of sensitive data a.s.a.p.
+                        Arrays.fill(decodedData, (byte) 0); // get rid of sensitive data a.s.a.p.
+                    }
+                } catch (IOException | GeneralSecurityException | RuntimeException e) {
+                    ResourceDecodeResult result =
+                        passwordProvider.handleDecodeAttemptResult(session, resourceKey, retryIndex, password, e);
+                    password = null; // get rid of sensitive data a.s.a.p.
+                    if (result == null) {
+                        result = ResourceDecodeResult.TERMINATE;
+                    }
+
+                    switch (result) {
+                        case TERMINATE:
+                            throw e;
+                        case RETRY:
+                            continue;
+                        case IGNORE:
+                            return Collections.emptyList();
+                        default:
+                            throw new ProtocolException("Unsupported decode attempt result (" + result + ") for " + resourceKey);
+                    }
+                }
+
+                passwordProvider.handleDecodeAttemptResult(session, resourceKey, retryIndex, password, null);
+                password = null; // get rid of sensitive data a.s.a.p.
+                return keys;
             }
         }
 
-        return super.extractKeyPairs(resourceKey, beginMarker, endMarker, passwordProvider, dataLines);
+        return super.extractKeyPairs(session, resourceKey, beginMarker, endMarker, passwordProvider, dataLines, headers);
     }
 
-    protected byte[] applyPrivateKeyCipher(byte[] bytes, PrivateKeyEncryptionContext encContext, boolean encryptIt) throws GeneralSecurityException {
+    protected byte[] applyPrivateKeyCipher(
+            byte[] bytes, PrivateKeyEncryptionContext encContext, boolean encryptIt)
+                throws GeneralSecurityException, IOException {
         String cipherName = encContext.getCipherName();
         PrivateKeyObfuscator o = encContext.resolvePrivateKeyObfuscator();
         if (o == null) {

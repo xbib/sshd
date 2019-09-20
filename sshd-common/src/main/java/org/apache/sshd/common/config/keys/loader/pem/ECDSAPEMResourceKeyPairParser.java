@@ -38,9 +38,11 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
+import org.apache.sshd.common.NamedResource;
 import org.apache.sshd.common.cipher.ECCurves;
 import org.apache.sshd.common.config.keys.FilePasswordProvider;
 import org.apache.sshd.common.config.keys.KeyUtils;
+import org.apache.sshd.common.session.SessionContext;
 import org.apache.sshd.common.util.io.NoCloseInputStream;
 import org.apache.sshd.common.util.io.der.ASN1Object;
 import org.apache.sshd.common.util.io.der.ASN1Type;
@@ -53,11 +55,11 @@ import org.apache.sshd.common.util.security.SecurityUtils;
 public class ECDSAPEMResourceKeyPairParser extends AbstractPEMResourceKeyPairParser {
     public static final String BEGIN_MARKER = "BEGIN EC PRIVATE KEY";
     public static final List<String> BEGINNERS =
-            Collections.unmodifiableList(Collections.singletonList(BEGIN_MARKER));
+        Collections.unmodifiableList(Collections.singletonList(BEGIN_MARKER));
 
     public static final String END_MARKER = "END EC PRIVATE KEY";
     public static final List<String> ENDERS =
-            Collections.unmodifiableList(Collections.singletonList(END_MARKER));
+        Collections.unmodifiableList(Collections.singletonList(END_MARKER));
 
     /**
      * @see <A HREF="https://tools.ietf.org/html/rfc3279#section-2.3.5">RFC-3279 section 2.3.5</A>
@@ -72,8 +74,11 @@ public class ECDSAPEMResourceKeyPairParser extends AbstractPEMResourceKeyPairPar
 
     @Override
     public Collection<KeyPair> extractKeyPairs(
-            String resourceKey, String beginMarker, String endMarker, FilePasswordProvider passwordProvider, InputStream stream)
-                    throws IOException, GeneralSecurityException {
+            SessionContext session, NamedResource resourceKey,
+            String beginMarker, String endMarker,
+            FilePasswordProvider passwordProvider,
+            InputStream stream, Map<String, String> headers)
+                throws IOException, GeneralSecurityException {
         Map.Entry<ECPublicKeySpec, ECPrivateKeySpec> spec = decodeECPrivateKeySpec(stream, false);
         if (!SecurityUtils.isECCSupported()) {
             throw new NoSuchProviderException("ECC not supported");
@@ -163,7 +168,7 @@ public class ECDSAPEMResourceKeyPairParser extends AbstractPEMResourceKeyPairPar
 
         // TODO make sure params object tag is 0xA0
 
-        final List<Integer> curveOID;
+        List<Integer> curveOID;
         try (DERParser paramsParser = paramsObject.createParser()) {
             ASN1Object namedCurve = paramsParser.readObject();
             if (namedCurve == null) {
@@ -184,9 +189,9 @@ public class ECDSAPEMResourceKeyPairParser extends AbstractPEMResourceKeyPairPar
 
     /**
      * <P>ASN.1 syntax according to rfc5915 is:</P>
-     * <PRE>
+     * <pre><code>
      *      publicKey  [1] BIT STRING OPTIONAL
-     * </PRE>
+     * </code></pre>
      * @param curve The {@link ECCurves} curve
      * @param parser The {@link DERParser} assumed to be positioned at the
      * start of the data

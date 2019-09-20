@@ -19,6 +19,7 @@
 
 package org.apache.sshd.common;
 
+import java.nio.charset.Charset;
 import java.util.Collections;
 import java.util.Map;
 
@@ -57,7 +58,7 @@ public interface PropertyResolver {
 
     /**
      * @return The parent resolver that can be used to query for missing
-     *         properties - {@code null} if no parent
+     * properties - {@code null} if no parent
      */
     PropertyResolver getParentPropertyResolver();
 
@@ -81,8 +82,8 @@ public interface PropertyResolver {
      * be converted into one.
      * </P>
      *
-     * @return a valid <code>Map</code> containing configuration values, never
-     *         {@code null}
+     * @return a valid <code>Map</code> containing configuration values, never {@code null}.
+     * <b>Note:</b> may be immutable.
      */
     Map<String, Object> getProperties();
 
@@ -121,4 +122,10 @@ public interface PropertyResolver {
     default Object getObject(String name) {
         return PropertyResolverUtils.getObject(this, name);
     }
+
+    default Charset getCharset(String name, Charset defaultValue) {
+        Object value = getObject(name);
+        return (value == null) ? defaultValue : PropertyResolverUtils.toCharset(value);
+    }
+
 }

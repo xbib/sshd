@@ -26,21 +26,22 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArraySet;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.IntUnaryOperator;
 
-import org.apache.sshd.common.agent.AgentForwardSupport;
-import org.apache.sshd.common.agent.DefaultAgentForwardSupport;
-import org.apache.sshd.common.channel.AbstractClientChannel;
 import org.apache.sshd.common.future.OpenFuture;
 import org.apache.sshd.common.Closeable;
 import org.apache.sshd.common.FactoryManager;
-import org.apache.sshd.common.NamedFactory;
 import org.apache.sshd.common.SshConstants;
 import org.apache.sshd.common.channel.AbstractChannel;
 import org.apache.sshd.common.channel.Channel;
+import org.apache.sshd.common.channel.ChannelFactory;
 import org.apache.sshd.common.channel.RequestHandler;
 import org.apache.sshd.common.channel.Window;
 import org.apache.sshd.common.channel.exception.SshChannelNotFoundException;
@@ -52,6 +53,7 @@ import org.apache.sshd.common.forward.PortForwardingEventListenerManager;
 import org.apache.sshd.common.io.AbstractIoWriteFuture;
 import org.apache.sshd.common.io.IoWriteFuture;
 import org.apache.sshd.common.session.ConnectionService;
+import org.apache.sshd.common.session.ReservedSessionMessagesHandler;
 import org.apache.sshd.common.session.Session;
 import org.apache.sshd.common.session.UnknownChannelReferenceHandler;
 import org.apache.sshd.common.util.EventListenerUtils;
@@ -60,16 +62,13 @@ import org.apache.sshd.common.util.Int2IntFunction;
 import org.apache.sshd.common.util.ValidateUtils;
 import org.apache.sshd.common.util.buffer.Buffer;
 import org.apache.sshd.common.util.closeable.AbstractInnerCloseable;
-import org.apache.sshd.common.x11.DefaultX11ForwardSupport;
-import org.apache.sshd.common.x11.X11ForwardSupport;
 
 /**
  * Base implementation of ConnectionService.
  *
- * @param <S> Type of {@link AbstractSession} being used
  * @author <a href="mailto:dev@mina.apache.org">Apache MINA SSHD Project</a>
  */
-public abstract class AbstractConnectionService<S extends AbstractSession>
+public abstract class AbstractConnectionService
                 extends AbstractInnerCloseable
                 implements ConnectionService {
     /**
@@ -89,6 +88,9 @@ public abstract class AbstractConnectionService<S extends AbstractSession>
      */
     public static final IntUnaryOperator RESPONSE_BUFFER_GROWTH_FACTOR = Int2IntFunction.add(Byte.SIZE);
 
+    /** Used in {@code SSH_MSH_IGNORE} messages for the keep-alive mechanism */
+    public static final String DEFAULT_SESSION_IGNORE_HEARTBEAT_STRING = "ignore@sshd.apache.org";
+
     /**
      * Map of channels keyed by the identifier
      */
@@ -97,20 +99,27 @@ public abstract class AbstractConnectionService<S extends AbstractSession>
      * Next channel identifier
      */
     protected final AtomicInteger nextChannelId = new AtomicInteger(0);
+    protected final AtomicLong heartbeatCount = new AtomicLong(0L);
+    private ScheduledFuture<?> heartBeat;
 
-    private final AtomicReference<AgentForwardSupport> agentForwardHolder = new AtomicReference<>();
-    private final AtomicReference<X11ForwardSupport> x11ForwardHolder = new AtomicReference<>();
     private final AtomicReference<ForwardingFilter> forwarderHolder = new AtomicReference<>();
     private final AtomicBoolean allowMoreSessions = new AtomicBoolean(true);
     private final Collection<PortForwardingEventListener> listeners = new CopyOnWriteArraySet<>();
     private final Collection<PortForwardingEventListenerManager> managersHolder = new CopyOnWriteArraySet<>();
+    private final Map<String, Object> properties = new ConcurrentHashMap<>();
     private final PortForwardingEventListener listenerProxy;
-    private final S sessionInstance;
+    private final AbstractSession sessionInstance;
     private UnknownChannelReferenceHandler unknownChannelReferenceHandler;
 
-    protected AbstractConnectionService(S session) {
+    protected AbstractConnectionService(AbstractSession session) {
         sessionInstance = Objects.requireNonNull(session, "No session");
-        listenerProxy = EventListenerUtils.proxyWrapper(PortForwardingEventListener.class, getClass().getClassLoader(), listeners);
+        listenerProxy = EventListenerUtils.proxyWrapper(
+            PortForwardingEventListener.class, getClass().getClassLoader(), listeners);
+    }
+
+    @Override
+    public Map<String, Object> getProperties() {
+        return properties;
     }
 
     @Override
@@ -166,26 +175,137 @@ public abstract class AbstractConnectionService<S extends AbstractSession>
     }
 
     @Override
-    public S getSession() {
+    public AbstractSession getSession() {
         return sessionInstance;
     }
 
     @Override
     public void start() {
-        // do nothing
+        heartBeat = startHeartBeat();
+    }
+
+    protected synchronized ScheduledFuture<?> startHeartBeat() {
+        stopHeartBeat();    // make sure any existing heartbeat is stopped
+
+        HeartbeatType heartbeatType = getSessionHeartbeatType();
+        long interval = getSessionHeartbeatInterval();
+        Session session = getSession();
+        boolean debugEnabled = log.isDebugEnabled();
+        if (debugEnabled) {
+            log.debug("startHeartbeat({}) heartbeat type={}, interval={}", session, heartbeatType, interval);
+        }
+
+        if ((heartbeatType == null) || (heartbeatType == HeartbeatType.NONE) || (interval <= 0L)) {
+            return null;
+        }
+
+        FactoryManager manager = session.getFactoryManager();
+        ScheduledExecutorService service = manager.getScheduledExecutorService();
+        return service.scheduleAtFixedRate(
+            this::sendHeartBeat, interval, interval, TimeUnit.MILLISECONDS);
+    }
+
+    /**
+     * Sends a heartbeat message/packet
+     * @return {@code true} if heartbeat successfully sent
+     */
+    protected boolean sendHeartBeat() {
+        HeartbeatType heartbeatType = getSessionHeartbeatType();
+        long interval = getSessionHeartbeatInterval();
+        Session session = getSession();
+        boolean traceEnabled = log.isTraceEnabled();
+        if (traceEnabled) {
+            log.trace("sendHeartbeat({}) heartbeat type={}, interval={}",
+                session, heartbeatType, interval);
+        }
+
+        if ((heartbeatType == null) || (interval <= 0L) || (heartBeat == null)) {
+            return false;
+        }
+
+        try {
+            switch (heartbeatType) {
+                case NONE:
+                    return false;
+                case IGNORE: {
+                    Buffer buffer = session.createBuffer(
+                        SshConstants.SSH_MSG_IGNORE, DEFAULT_SESSION_IGNORE_HEARTBEAT_STRING.length() + Byte.SIZE);
+                    buffer.putString(DEFAULT_SESSION_IGNORE_HEARTBEAT_STRING);
+
+                    IoWriteFuture future = session.writePacket(buffer);
+                    future.addListener(this::futureDone);
+                    return true;
+                }
+                case RESERVED: {
+                    ReservedSessionMessagesHandler handler =
+                        Objects.requireNonNull(
+                            session.getReservedSessionMessagesHandler(),
+                            "No customized heartbeat handler registered");
+                    return handler.sendReservedHeartbeat(this);
+                }
+                default:
+                    throw new UnsupportedOperationException("Unsupported heartbeat type: " + heartbeatType);
+            }
+
+        } catch (Throwable e) {
+            session.exceptionCaught(e);
+            if (log.isDebugEnabled()) {
+                log.debug("sendHeartBeat({}) failed ({}) to send heartbeat #{} request={}: {}",
+                    session, e.getClass().getSimpleName(), heartbeatCount, heartbeatType, e.getMessage());
+            }
+            if (log.isTraceEnabled()) {
+                log.trace("sendHeartBeat(" + session + ") exception details", e);
+            }
+
+            return false;
+        }
+    }
+
+    protected void futureDone(IoWriteFuture future) {
+        Throwable t = future.getException();
+        if (t != null) {
+            Session session = getSession();
+            session.exceptionCaught(t);
+        }
+    }
+
+    protected synchronized void stopHeartBeat() {
+        boolean debugEnabled = log.isDebugEnabled();
+        Session session = getSession();
+        if (heartBeat == null) {
+            if (debugEnabled) {
+                log.debug("stopHeartBeat({}) no heartbeat to stop", session);
+            }
+            return;
+        }
+
+        if (debugEnabled) {
+            log.debug("stopHeartBeat({}) stopping", session);
+        }
+
+        try {
+            heartBeat.cancel(true);
+        } finally {
+            heartBeat = null;
+        }
+
+        if (debugEnabled) {
+            log.debug("stopHeartBeat({}) stopped", session);
+        }
     }
 
     @Override
     public ForwardingFilter getForwardingFilter() {
         ForwardingFilter forwarder;
-        S session = getSession();
+        AbstractSession session = getSession();
         synchronized (forwarderHolder) {
             forwarder = forwarderHolder.get();
             if (forwarder != null) {
                 return forwarder;
             }
 
-            forwarder = ValidateUtils.checkNotNull(createForwardingFilter(session), "No forwarder created for %s", session);
+            forwarder = ValidateUtils.checkNotNull(
+                createForwardingFilter(session), "No forwarder created for %s", session);
             forwarderHolder.set(forwarder);
         }
 
@@ -197,12 +317,13 @@ public abstract class AbstractConnectionService<S extends AbstractSession>
 
     @Override
     protected void preClose() {
+        stopHeartBeat();
         this.listeners.clear();
         this.managersHolder.clear();
         super.preClose();
     }
 
-    protected ForwardingFilter createForwardingFilter(S session) {
+    protected ForwardingFilter createForwardingFilter(AbstractSession session) {
         FactoryManager manager =
             Objects.requireNonNull(session.getFactoryManager(), "No factory manager");
         ForwardingFilterFactory factory =
@@ -213,60 +334,11 @@ public abstract class AbstractConnectionService<S extends AbstractSession>
     }
 
     @Override
-    public X11ForwardSupport getX11ForwardSupport() {
-        X11ForwardSupport x11Support;
-        S session = getSession();
-        synchronized (x11ForwardHolder) {
-            x11Support = x11ForwardHolder.get();
-            if (x11Support != null) {
-                return x11Support;
-            }
-
-            x11Support = ValidateUtils.checkNotNull(createX11ForwardSupport(session), "No X11 forwarder created for %s", session);
-            x11ForwardHolder.set(x11Support);
-        }
-
-        if (log.isDebugEnabled()) {
-            log.debug("getX11ForwardSupport({}) created instance", session);
-        }
-        return x11Support;
-    }
-
-    protected X11ForwardSupport createX11ForwardSupport(S session) {
-        return new DefaultX11ForwardSupport(this);
-    }
-
-    @Override
-    public AgentForwardSupport getAgentForwardSupport() {
-        AgentForwardSupport agentForward;
-        S session = getSession();
-        synchronized (agentForwardHolder) {
-            agentForward = agentForwardHolder.get();
-            if (agentForward != null) {
-                return agentForward;
-            }
-
-            agentForward = ValidateUtils.checkNotNull(createAgentForwardSupport(session), "No agent forward created for %s", session);
-            agentForwardHolder.set(agentForward);
-        }
-
-        if (log.isDebugEnabled()) {
-            log.debug("getAgentForwardSupport({}) created instance", session);
-        }
-
-        return agentForward;
-    }
-
-    protected AgentForwardSupport createAgentForwardSupport(S session) {
-        return new DefaultAgentForwardSupport(this);
-    }
-
-    @Override
     protected Closeable getInnerCloseable() {
         return builder()
-                .sequential(forwarderHolder.get(), agentForwardHolder.get(), x11ForwardHolder.get())
-                .parallel(toString(), channels.values())
-                .build();
+            .sequential(forwarderHolder.get())
+            .parallel(toString(), channels.values())
+            .build();
     }
 
     protected int getNextChannelId() {
@@ -275,8 +347,8 @@ public abstract class AbstractConnectionService<S extends AbstractSession>
 
     @Override
     public int registerChannel(Channel channel) throws IOException {
-        Session session = getSession();
-        int maxChannels = session.getIntProperty(MAX_CONCURRENT_CHANNELS_PROP, DEFAULT_MAX_CHANNELS);
+        AbstractSession session = getSession();
+        int maxChannels = this.getIntProperty(MAX_CONCURRENT_CHANNELS_PROP, DEFAULT_MAX_CHANNELS);
         int curSize = channels.size();
         if (curSize > maxChannels) {
             throw new IllegalStateException("Currently active channels (" + curSize + ") at max.: " + maxChannels);
@@ -286,7 +358,7 @@ public abstract class AbstractConnectionService<S extends AbstractSession>
         channel.init(this, session, channelId);
 
         boolean registered = false;
-        synchronized (lock) {
+        synchronized (channels) {
             if (!isClosing()) {
                 channels.put(channelId, channel);
                 registered = true;
@@ -304,9 +376,10 @@ public abstract class AbstractConnectionService<S extends AbstractSession>
     }
 
     protected void handleChannelRegistrationFailure(Channel channel, int channelId) throws IOException {
-        RuntimeException reason = new IllegalStateException("Channel id=" + channelId + " not registered because session is being closed: " + this);
+        RuntimeException reason = new IllegalStateException(
+            "Channel id=" + channelId + " not registered because session is being closed: " + this);
         AbstractChannel notifier =
-                ValidateUtils.checkInstanceOf(channel, AbstractChannel.class, "Non abstract channel for id=%d", channelId);
+            ValidateUtils.checkInstanceOf(channel, AbstractChannel.class, "Non abstract channel for id=%d", channelId);
         notifier.signalChannelClosed(reason);
         throw reason;
     }
@@ -319,7 +392,11 @@ public abstract class AbstractConnectionService<S extends AbstractSession>
     @Override
     public void unregisterChannel(Channel channel) {
         int channelId = channel.getId();
-        Channel result = channels.remove(channelId);
+        Channel result;
+        synchronized (channels) {
+            result = channels.remove(channelId);
+        }
+
         if (log.isDebugEnabled()) {
             log.debug("unregisterChannel({}) result={}", channel, result);
         }
@@ -370,8 +447,21 @@ public abstract class AbstractConnectionService<S extends AbstractSession>
             case SshConstants.SSH_MSG_REQUEST_FAILURE:
                 requestFailure(buffer);
                 break;
-            default:
-                throw new IllegalStateException("Unsupported command: " + SshConstants.getCommandMessageName(cmd));
+            default: {
+                /*
+                 * According to https://tools.ietf.org/html/rfc4253#section-11.4
+                 *
+                 *      An implementation MUST respond to all unrecognized messages
+                 *      with an SSH_MSG_UNIMPLEMENTED message in the order in which
+                 *      the messages were received.
+                 */
+                AbstractSession session = getSession();
+                if (log.isDebugEnabled()) {
+                    log.debug("process({}) Unsupported command: {}",
+                        session, SshConstants.getCommandMessageName(cmd));
+                }
+                session.notImplemented(cmd, buffer);
+            }
         }
     }
 
@@ -399,7 +489,7 @@ public abstract class AbstractConnectionService<S extends AbstractSession>
         long rmpsize = buffer.getUInt();
         if (log.isDebugEnabled()) {
             log.debug("channelOpenConfirmation({}) SSH_MSG_CHANNEL_OPEN_CONFIRMATION sender={}, window-size={}, packet-size={}",
-                      channel, sender, rwsize, rmpsize);
+                  channel, sender, rwsize, rmpsize);
         }
         /*
          * NOTE: the 'sender' of the SSH_MSG_CHANNEL_OPEN_CONFIRMATION is the
@@ -413,17 +503,27 @@ public abstract class AbstractConnectionService<S extends AbstractSession>
     }
 
     public void channelOpenFailure(Buffer buffer) throws IOException {
-        AbstractClientChannel channel =
-            (AbstractClientChannel) getChannel(SshConstants.SSH_MSG_CHANNEL_OPEN_FAILURE, buffer);
+        AbstractChannel channel =
+            (AbstractChannel) getChannel(SshConstants.SSH_MSG_CHANNEL_OPEN_FAILURE, buffer);
         if (channel == null) {
             return; // debug breakpoint
         }
 
         int id = channel.getId();
-        if (log.isDebugEnabled()) {
+        boolean debugEnabled = log.isDebugEnabled();
+        if (debugEnabled) {
             log.debug("channelOpenFailure({}) Received SSH_MSG_CHANNEL_OPEN_FAILURE", channel);
         }
-        channels.remove(id);
+
+        Channel removed;
+        synchronized (channels) {
+            removed = channels.remove(id);
+        }
+
+        if (debugEnabled) {
+            log.debug("channelOpenFailure({}) unregistered {}", channel, removed);
+        }
+
         channel.handleOpenFailure(buffer);
     }
 
@@ -569,8 +669,7 @@ public abstract class AbstractConnectionService<S extends AbstractSession>
         if (handler == null) {
             // Throw a special exception - SSHD-777
             throw new SshChannelNotFoundException(recipient,
-                    "Received " + SshConstants.getCommandMessageName(cmd) + " on unknown channel " + recipient);
-
+                "Received " + SshConstants.getCommandMessageName(cmd) + " on unknown channel " + recipient);
         }
 
         channel = handler.handleUnknownChannelCommand(this, cmd, recipient, buffer);
@@ -584,7 +683,7 @@ public abstract class AbstractConnectionService<S extends AbstractSession>
             return handler;
         }
 
-        Session s = getSession();
+        AbstractSession s = getSession();
         return (s == null) ? null : s.resolveUnknownChannelReferenceHandler();
     }
 
@@ -596,14 +695,16 @@ public abstract class AbstractConnectionService<S extends AbstractSession>
         /*
          * NOTE: the 'sender' is the identifier assigned by the remote side - the server in this case
          */
-        if (log.isDebugEnabled()) {
+        boolean debugEnabled = log.isDebugEnabled();
+        if (debugEnabled) {
             log.debug("channelOpen({}) SSH_MSG_CHANNEL_OPEN sender={}, type={}, window-size={}, packet-size={}",
-                      this, sender, type, rwsize, rmpsize);
+                  this, sender, type, rwsize, rmpsize);
         }
 
         if (isClosing()) {
             // TODO add language tag configurable control
-            sendChannelOpenFailure(buffer, sender, SshConstants.SSH_OPEN_CONNECT_FAILED, "Server is shutting down while attempting to open channel type=" + type, "");
+            sendChannelOpenFailure(buffer, sender, SshConstants.SSH_OPEN_CONNECT_FAILED,
+                "Server is shutting down while attempting to open channel type=" + type, "");
             return;
         }
 
@@ -613,12 +714,13 @@ public abstract class AbstractConnectionService<S extends AbstractSession>
             return;
         }
 
-        Session session = getSession();
+        AbstractSession session = getSession();
         FactoryManager manager = Objects.requireNonNull(session.getFactoryManager(), "No factory manager");
-        Channel channel = NamedFactory.create(manager.getChannelFactories(), type);
+        Channel channel = ChannelFactory.createChannel(session, manager.getChannelFactories(), type);
         if (channel == null) {
             // TODO add language tag configurable control
-            sendChannelOpenFailure(buffer, sender, SshConstants.SSH_OPEN_UNKNOWN_CHANNEL_TYPE, "Unsupported channel type: " + type, "");
+            sendChannelOpenFailure(buffer, sender,
+                SshConstants.SSH_OPEN_UNKNOWN_CHANNEL_TYPE, "Unsupported channel type: " + type, "");
             return;
         }
 
@@ -628,50 +730,57 @@ public abstract class AbstractConnectionService<S extends AbstractSession>
             try {
                 if (future.isOpened()) {
                     Window window = channel.getLocalWindow();
-                    if (log.isDebugEnabled()) {
+                    if (debugEnabled) {
                         log.debug("operationComplete({}) send SSH_MSG_CHANNEL_OPEN_CONFIRMATION recipient={}, sender={}, window-size={}, packet-size={}",
-                                  channel, sender, channelId, window.getSize(), window.getPacketSize());
+                              channel, sender, channelId, window.getSize(), window.getPacketSize());
                     }
-                    Buffer buf = session.createBuffer(SshConstants.SSH_MSG_CHANNEL_OPEN_CONFIRMATION, Integer.SIZE);
+                    Buffer buf =
+                        session.createBuffer(SshConstants.SSH_MSG_CHANNEL_OPEN_CONFIRMATION, Integer.SIZE);
                     buf.putInt(sender); // remote (server side) identifier
                     buf.putInt(channelId);  // local (client side) identifier
                     buf.putInt(window.getSize());
                     buf.putInt(window.getPacketSize());
                     session.writePacket(buf);
                 } else {
+                    int reasonCode = 0;
+                    String message = "Generic error while opening channel: " + channelId;
                     Throwable exception = future.getException();
                     if (exception != null) {
-                        String message = exception.getMessage();
-                        int reasonCode = 0;
                         if (exception instanceof SshChannelOpenException) {
                             reasonCode = ((SshChannelOpenException) exception).getReasonCode();
                         } else {
                             message = exception.getClass().getSimpleName() + " while opening channel: " + message;
                         }
-
-                        Buffer buf = session.createBuffer(SshConstants.SSH_MSG_CHANNEL_OPEN_FAILURE, message.length() + Long.SIZE);
-                        sendChannelOpenFailure(buf, sender, reasonCode, message, "");
+                    } else {
+                        log.warn("operationComplete({}) no exception on closed future={}",
+                             AbstractConnectionService.this, future);
                     }
+
+                    Buffer buf =
+                        session.createBuffer(SshConstants.SSH_MSG_CHANNEL_OPEN_FAILURE, message.length() + Long.SIZE);
+                    sendChannelOpenFailure(buf, sender, reasonCode, message, "");
                 }
             } catch (IOException e) {
-                if (log.isDebugEnabled()) {
+                if (debugEnabled) {
                     log.debug("operationComplete({}) {}: {}",
-                              AbstractConnectionService.this, e.getClass().getSimpleName(), e.getMessage());
+                          AbstractConnectionService.this, e.getClass().getSimpleName(), e.getMessage());
                 }
                 session.exceptionCaught(e);
             }
         });
     }
 
-    protected IoWriteFuture sendChannelOpenFailure(Buffer buffer, int sender, int reasonCode, String message, String lang) throws IOException {
+    protected IoWriteFuture sendChannelOpenFailure(
+            Buffer buffer, int sender, int reasonCode, String message, String lang)
+                throws IOException {
         if (log.isDebugEnabled()) {
             log.debug("sendChannelOpenFailure({}) sender={}, reason={}, lang={}, message='{}'",
-                      this, sender, SshConstants.getOpenErrorCodeName(reasonCode), lang, message);
+                  this, sender, SshConstants.getOpenErrorCodeName(reasonCode), lang, message);
         }
 
-        Session session = getSession();
+        AbstractSession session = getSession();
         Buffer buf = session.createBuffer(SshConstants.SSH_MSG_CHANNEL_OPEN_FAILURE,
-                Long.SIZE + GenericUtils.length(message) + GenericUtils.length(lang));
+            Long.SIZE + GenericUtils.length(message) + GenericUtils.length(lang));
         buf.putInt(sender);
         buf.putInt(reasonCode);
         buf.putString(message);
@@ -691,23 +800,24 @@ public abstract class AbstractConnectionService<S extends AbstractSession>
     protected IoWriteFuture globalRequest(Buffer buffer) throws Exception {
         String req = buffer.getString();
         boolean wantReply = buffer.getBoolean();
-        if (log.isDebugEnabled()) {
-            log.debug("globalRequest({}) received SSH_MSG_GLOBAL_REQUEST {} want-reply={}",
-                      this, req, wantReply);
+        boolean debugEnabled = log.isDebugEnabled();
+        if (debugEnabled) {
+            log.debug("globalRequest({}) received SSH_MSG_GLOBAL_REQUEST {} want-reply={}", this, req, wantReply);
         }
 
-        Session session = getSession();
+        AbstractSession session = getSession();
         FactoryManager manager = Objects.requireNonNull(session.getFactoryManager(), "No factory manager");
         Collection<RequestHandler<ConnectionService>> handlers = manager.getGlobalRequestHandlers();
         if (GenericUtils.size(handlers) > 0) {
+            boolean traceEnabled = log.isTraceEnabled();
             for (RequestHandler<ConnectionService> handler : handlers) {
                 RequestHandler.Result result;
                 try {
                     result = handler.process(this, req, wantReply, buffer);
                 } catch (Throwable e) {
                     log.warn("globalRequest({})[{}, want-reply={}] failed ({}) to process: {}",
-                             this, req, wantReply, e.getClass().getSimpleName(), e.getMessage());
-                    if (log.isDebugEnabled()) {
+                         this, req, wantReply, e.getClass().getSimpleName(), e.getMessage());
+                    if (debugEnabled) {
                         log.debug("globalRequest(" + this + ")[" + req + ", want-reply=" + wantReply + "] failure details", e);
                     }
                     result = RequestHandler.Result.ReplyFailure;
@@ -715,9 +825,9 @@ public abstract class AbstractConnectionService<S extends AbstractSession>
 
                 // if Unsupported then check the next handler in line
                 if (RequestHandler.Result.Unsupported.equals(result)) {
-                    if (log.isTraceEnabled()) {
+                    if (traceEnabled) {
                         log.trace("globalRequest({}) {}#process({})[want-reply={}] : {}",
-                                  this, handler.getClass().getSimpleName(), req, wantReply, result);
+                              this, handler.getClass().getSimpleName(), req, wantReply, result);
                     }
                 } else {
                     return sendGlobalResponse(buffer, req, result, wantReply);
@@ -733,7 +843,9 @@ public abstract class AbstractConnectionService<S extends AbstractSession>
         return sendGlobalResponse(buffer, req, RequestHandler.Result.Unsupported, wantReply);
     }
 
-    protected IoWriteFuture sendGlobalResponse(Buffer buffer, String req, RequestHandler.Result result, boolean wantReply) throws IOException {
+    protected IoWriteFuture sendGlobalResponse(
+            Buffer buffer, String req, RequestHandler.Result result, boolean wantReply)
+                throws IOException {
         if (log.isDebugEnabled()) {
             log.debug("sendGlobalResponse({})[{}] result={}, want-reply={}", this, req, result, wantReply);
         }
@@ -747,20 +859,20 @@ public abstract class AbstractConnectionService<S extends AbstractSession>
         }
 
         byte cmd = RequestHandler.Result.ReplySuccess.equals(result)
-                 ? SshConstants.SSH_MSG_REQUEST_SUCCESS
-                 : SshConstants.SSH_MSG_REQUEST_FAILURE;
+             ? SshConstants.SSH_MSG_REQUEST_SUCCESS
+             : SshConstants.SSH_MSG_REQUEST_FAILURE;
         Session session = getSession();
         Buffer rsp = session.createBuffer(cmd, 2);
         return session.writePacket(rsp);
     }
 
     protected void requestSuccess(Buffer buffer) throws Exception {
-        S s = getSession();
+        AbstractSession s = getSession();
         s.requestSuccess(buffer);
     }
 
     protected void requestFailure(Buffer buffer) throws Exception {
-        S s = getSession();
+        AbstractSession s = getSession();
         s.requestFailure(buffer);
     }
 

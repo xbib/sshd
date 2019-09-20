@@ -19,12 +19,6 @@
 
 package org.apache.sshd.client.subsystem.sftp;
 
-import org.apache.sshd.common.subsystem.sftp.SftpConstants;
-import org.apache.sshd.common.subsystem.sftp.SftpException;
-import org.apache.sshd.common.util.GenericUtils;
-import org.apache.sshd.common.util.ValidateUtils;
-import org.apache.sshd.common.util.io.IoUtils;
-
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.MappedByteBuffer;
@@ -46,20 +40,29 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
+import org.apache.sshd.common.subsystem.sftp.SftpConstants;
+import org.apache.sshd.common.subsystem.sftp.SftpException;
+import org.apache.sshd.common.util.GenericUtils;
+import org.apache.sshd.common.util.ValidateUtils;
+import org.apache.sshd.common.util.io.IoUtils;
+
 /**
  * @author <a href="mailto:dev@mina.apache.org">Apache MINA SSHD Project</a>
  */
 public class SftpRemotePathChannel extends FileChannel {
     public static final String COPY_BUFSIZE_PROP = "sftp-channel-copy-buf-size";
-
     public static final int DEFAULT_TRANSFER_BUFFER_SIZE = IoUtils.DEFAULT_COPY_SIZE;
 
     public static final Set<SftpClient.OpenMode> READ_MODES =
-            Collections.unmodifiableSet(EnumSet.of(SftpClient.OpenMode.Read));
+        Collections.unmodifiableSet(EnumSet.of(SftpClient.OpenMode.Read));
 
     public static final Set<SftpClient.OpenMode> WRITE_MODES =
-            Collections.unmodifiableSet(
-                    EnumSet.of(SftpClient.OpenMode.Write, SftpClient.OpenMode.Append, SftpClient.OpenMode.Create, SftpClient.OpenMode.Truncate));
+        Collections.unmodifiableSet(
+            EnumSet.of(
+                SftpClient.OpenMode.Write,
+                SftpClient.OpenMode.Append,
+                SftpClient.OpenMode.Create,
+                SftpClient.OpenMode.Truncate));
 
     private final String path;
     private final Collection<SftpClient.OpenMode> modes;
@@ -357,7 +360,7 @@ public class SftpRemotePathChannel extends FileChannel {
     @Override
     protected void implCloseChannel() throws IOException {
         try {
-            final Thread thread = blockingThreadHolder.get();
+            Thread thread = blockingThreadHolder.get();
             if (thread != null) {
                 thread.interrupt();
             }

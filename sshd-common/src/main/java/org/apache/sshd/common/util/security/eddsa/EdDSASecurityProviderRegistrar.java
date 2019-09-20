@@ -43,6 +43,15 @@ public class EdDSASecurityProviderRegistrar extends AbstractSecurityProviderRegi
         super(SecurityUtils.EDDSA);
     }
 
+    @Override
+    public boolean isEnabled() {
+        if (!super.isEnabled()) {
+            return false;
+        }
+
+        // For backward compatibility
+        return this.getBooleanProperty(SecurityUtils.EDDSA_SUPPORTED_PROP, true);
+    }
 
     @Override
     public Provider getSecurityProvider() {

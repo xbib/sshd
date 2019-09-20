@@ -23,20 +23,23 @@ import java.io.InterruptedIOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.apache.sshd.client.ClientAuthenticationManager;
 import org.apache.sshd.client.auth.UserAuth;
+import org.apache.sshd.client.auth.UserAuthFactory;
 import org.apache.sshd.client.auth.keyboard.UserInteraction;
 import org.apache.sshd.client.future.AuthFuture;
 import org.apache.sshd.client.future.DefaultAuthFuture;
-import org.apache.sshd.common.NamedFactory;
 import org.apache.sshd.common.NamedResource;
 import org.apache.sshd.common.RuntimeSshException;
 import org.apache.sshd.common.Service;
 import org.apache.sshd.common.SshConstants;
 import org.apache.sshd.common.SshException;
+import org.apache.sshd.common.auth.UserAuthMethodFactory;
 import org.apache.sshd.common.session.Session;
 import org.apache.sshd.common.session.SessionHolder;
 import org.apache.sshd.common.util.GenericUtils;
@@ -54,14 +57,15 @@ public class ClientUserAuthService
         implements Service, SessionHolder<ClientSession>, ClientSessionHolder {
 
     /**
-     * The AuthFuture that is being used by the current auth request.  This encodes the state.
+     * The AuthFuture that is being used by the current auth request. This encodes the state.
      * isSuccess -> authenticated, else if isDone -> server waiting for user auth, else authenticating.
      */
     private final AtomicReference<AuthFuture> authFutureHolder = new AtomicReference<>();
+    private final Map<String, Object> properties = new ConcurrentHashMap<>();
 
     private final ClientSessionImpl clientSession;
     private final List<String> clientMethods;
-    private final List<NamedFactory<UserAuth>> authFactories;
+    private final List<UserAuthFactory> authFactories;
 
     private String service;
     private List<String> serverMethods;
@@ -69,36 +73,41 @@ public class ClientUserAuthService
     private int currentMethod;
 
     public ClientUserAuthService(Session s) {
-        clientSession = ValidateUtils.checkInstanceOf(s, ClientSessionImpl.class, "Client side service used on server side: %s", s);
+        clientSession = ValidateUtils.checkInstanceOf(
+            s, ClientSessionImpl.class, "Client side service used on server side: %s", s);
         authFactories = ValidateUtils.checkNotNullAndNotEmpty(
-                clientSession.getUserAuthFactories(), "No user auth factories for %s", s);
+            clientSession.getUserAuthFactories(), "No user auth factories for %s", s);
         clientMethods = new ArrayList<>();
 
         String prefs = s.getString(ClientAuthenticationManager.PREFERRED_AUTHS);
+        boolean debugEnabled = log.isDebugEnabled();
         if (GenericUtils.isEmpty(prefs)) {
-            for (NamedFactory<UserAuth> factory : authFactories) {
+            for (UserAuthFactory factory : authFactories) {
                 clientMethods.add(factory.getName());
             }
         } else {
-            if (log.isDebugEnabled()) {
+            if (debugEnabled) {
                 log.debug("ClientUserAuthService({}) use configured preferences: {}", s, prefs);
             }
 
             for (String pref : GenericUtils.split(prefs, ',')) {
-                NamedFactory<UserAuth> factory = NamedResource.findByName(pref, String.CASE_INSENSITIVE_ORDER, authFactories);
+                UserAuthFactory factory =
+                    NamedResource.findByName(pref, String.CASE_INSENSITIVE_ORDER, authFactories);
                 if (factory != null) {
                     clientMethods.add(pref);
                 } else {
-                    if (log.isDebugEnabled()) {
+                    if (debugEnabled) {
                         log.debug("ClientUserAuthService({}) skip unknown preferred authentication method: {}", s, pref);
                     }
                 }
             }
         }
 
-        if (log.isDebugEnabled()) {
+        if (debugEnabled) {
             log.debug("ClientUserAuthService({}) client methods: {}", s, clientMethods);
         }
+
+        clientSession.resetAuthTimeout();
     }
 
     @Override
@@ -112,6 +121,11 @@ public class ClientUserAuthService
     }
 
     @Override
+    public Map<String, Object> getProperties() {
+        return properties;
+    }
+
+    @Override
     public void start() {
         // ignored
     }
@@ -121,11 +135,12 @@ public class ClientUserAuthService
 
         ClientSession session = getClientSession();
         // check if any previous future in use
-        AuthFuture authFuture = new DefaultAuthFuture(service, clientSession.getLock());
+        AuthFuture authFuture = new DefaultAuthFuture(service, clientSession.getFutureLock());
         AuthFuture currentFuture = authFutureHolder.getAndSet(authFuture);
+        boolean debugEnabled = log.isDebugEnabled();
         if (currentFuture != null) {
             if (currentFuture.isDone()) {
-                if (log.isDebugEnabled()) {
+                if (debugEnabled) {
                     log.debug("auth({})[{}] request new authentication", session, service);
                 }
             } else {
@@ -144,12 +159,13 @@ public class ClientUserAuthService
             }
         }
 
-        if (log.isDebugEnabled()) {
+        if (debugEnabled) {
             log.debug("auth({})[{}] send SSH_MSG_USERAUTH_REQUEST for 'none'", session, service);
         }
 
         String username = session.getUsername();
-        Buffer buffer = session.createBuffer(SshConstants.SSH_MSG_USERAUTH_REQUEST, username.length() + service.length() + Integer.SIZE);
+        Buffer buffer = session.createBuffer(SshConstants.SSH_MSG_USERAUTH_REQUEST,
+            username.length() + service.length() + Integer.SIZE);
         buffer.putString(username);
         buffer.putString(service);
         buffer.putString("none");
@@ -162,20 +178,21 @@ public class ClientUserAuthService
     public void process(int cmd, Buffer buffer) throws Exception {
         ClientSession session = getClientSession();
         AuthFuture authFuture = authFutureHolder.get();
+        boolean debugEnabled = log.isDebugEnabled();
         if ((authFuture != null) && authFuture.isSuccess()) {
             log.error("process({}) unexpected authenticated client command: {}",
-                      session, SshConstants.getCommandMessageName(cmd));
+                  session, SshConstants.getCommandMessageName(cmd));
             throw new IllegalStateException("UserAuth message delivered to authenticated client");
         } else if ((authFuture != null) && authFuture.isDone()) {
             // ignore for now; TODO: random packets
-            if (log.isDebugEnabled()) {
+            if (debugEnabled) {
                 log.debug("process({}) Ignoring random message - cmd={}",
-                          session, SshConstants.getCommandMessageName(cmd));
+                      session, SshConstants.getCommandMessageName(cmd));
             }
         } else if (cmd == SshConstants.SSH_MSG_USERAUTH_BANNER) {
             String welcome = buffer.getString();
             String lang = buffer.getString();
-            if (log.isDebugEnabled()) {
+            if (debugEnabled) {
                 log.debug("process({}) Welcome banner(lang={}): {}", session, lang, welcome);
             }
 
@@ -186,8 +203,8 @@ public class ClientUserAuthService
                 }
             } catch (Error e) {
                 log.warn("process({}) failed ({}) to consult interaction: {}",
-                         session, e.getClass().getSimpleName(), e.getMessage());
-                if (log.isDebugEnabled()) {
+                     session, e.getClass().getSimpleName(), e.getMessage());
+                if (debugEnabled) {
                     log.debug("process(" + session + ") interaction consultation failure details", e);
                 }
 
@@ -211,7 +228,7 @@ public class ClientUserAuthService
         if (cmd == SshConstants.SSH_MSG_USERAUTH_SUCCESS) {
             if (log.isDebugEnabled()) {
                 log.debug("processUserAuth({}) SSH_MSG_USERAUTH_SUCCESS Succeeded with {}",
-                          session, (userAuth == null) ? "<unknown>" : userAuth.getName());
+                      session, (userAuth == null) ? "<unknown>" : userAuth.getName());
             }
             if (userAuth != null) {
                 try {
@@ -234,7 +251,7 @@ public class ClientUserAuthService
             boolean partial = buffer.getBoolean();
             if (log.isDebugEnabled()) {
                 log.debug("processUserAuth({}) Received SSH_MSG_USERAUTH_FAILURE - partial={}, methods={}",
-                          session, partial, mths);
+                      session, partial, mths);
             }
             if (partial || (serverMethods == null)) {
                 serverMethods = Arrays.asList(GenericUtils.split(mths, ','));
@@ -258,7 +275,7 @@ public class ClientUserAuthService
 
         if (log.isDebugEnabled()) {
             log.debug("processUserAuth({}) delegate processing of {} to {}",
-                      session, SshConstants.getCommandMessageName(cmd), userAuth.getName());
+                  session, SshConstants.getCommandMessageName(cmd), userAuth.getName());
         }
 
         buffer.rpos(buffer.rpos() - 1);
@@ -269,15 +286,16 @@ public class ClientUserAuthService
 
     protected void tryNext(int cmd) throws Exception {
         ClientSession session = getClientSession();
+        boolean debugEnabled = log.isDebugEnabled();
         // Loop until we find something to try
         while (true) {
             if (userAuth == null) {
-                if (log.isDebugEnabled()) {
+                if (debugEnabled) {
                     log.debug("tryNext({}) starting authentication mechanisms: client={}, server={}",
-                              session, clientMethods, serverMethods);
+                          session, clientMethods, serverMethods);
                 }
             } else if (!userAuth.process(null)) {
-                if (log.isDebugEnabled()) {
+                if (debugEnabled) {
                     log.debug("tryNext({}) no initial request sent by method={}", session, userAuth.getName());
                 }
 
@@ -289,7 +307,7 @@ public class ClientUserAuthService
 
                 currentMethod++;
             } else {
-                if (log.isDebugEnabled()) {
+                if (debugEnabled) {
                     log.debug("tryNext({}) successfully processed initial buffer by method={}", session, userAuth.getName());
                 }
                 return;
@@ -304,23 +322,24 @@ public class ClientUserAuthService
             }
 
             if (currentMethod >= clientMethods.size()) {
-                if (log.isDebugEnabled()) {
+                if (debugEnabled) {
                     log.debug("tryNext({}) exhausted all methods - client={}, server={}",
-                              session, clientMethods, serverMethods);
+                          session, clientMethods, serverMethods);
                 }
 
                 // also wake up anyone sitting in waitFor
                 AuthFuture authFuture = Objects.requireNonNull(authFutureHolder.get(), "No current future");
-                authFuture.setException(new SshException(SshConstants.SSH2_DISCONNECT_NO_MORE_AUTH_METHODS_AVAILABLE, "No more authentication methods available"));
+                authFuture.setException(new SshException(
+                    SshConstants.SSH2_DISCONNECT_NO_MORE_AUTH_METHODS_AVAILABLE, "No more authentication methods available"));
                 return;
             }
 
-            userAuth = NamedFactory.create(authFactories, method);
+            userAuth = UserAuthMethodFactory.createUserAuth(session, authFactories, method);
             if (userAuth == null) {
                 throw new UnsupportedOperationException("Failed to find a user-auth factory for method=" + method);
             }
 
-            if (log.isDebugEnabled()) {
+            if (debugEnabled) {
                 log.debug("tryNext({}) attempting method={}", session, method);
             }
 

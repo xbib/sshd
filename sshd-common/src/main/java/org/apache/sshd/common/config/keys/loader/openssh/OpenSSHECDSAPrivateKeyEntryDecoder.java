@@ -42,6 +42,8 @@ import org.apache.sshd.common.config.keys.FilePasswordProvider;
 import org.apache.sshd.common.config.keys.KeyEntryResolver;
 import org.apache.sshd.common.config.keys.KeyUtils;
 import org.apache.sshd.common.config.keys.impl.AbstractPrivateKeyEntryDecoder;
+import org.apache.sshd.common.config.keys.impl.ECDSAPublicKeyEntryDecoder;
+import org.apache.sshd.common.session.SessionContext;
 import org.apache.sshd.common.util.security.SecurityUtils;
 
 /**
@@ -55,8 +57,9 @@ public class OpenSSHECDSAPrivateKeyEntryDecoder extends AbstractPrivateKeyEntryD
     }
 
     @Override
-    public ECPrivateKey decodePrivateKey(String keyType, FilePasswordProvider passwordProvider, InputStream keyData)
-            throws IOException, GeneralSecurityException {
+    public ECPrivateKey decodePrivateKey(
+            SessionContext session, String keyType, FilePasswordProvider passwordProvider, InputStream keyData)
+                throws IOException, GeneralSecurityException {
         ECCurves curve = ECCurves.fromKeyType(keyType);
         if (curve == null) {
             throw new InvalidKeySpecException("Not an EC curve name: " + keyType);
@@ -68,16 +71,21 @@ public class OpenSSHECDSAPrivateKeyEntryDecoder extends AbstractPrivateKeyEntryD
 
         String keyCurveName = curve.getName();
         // see rfc5656 section 3.1
-        String encCurveName = KeyEntryResolver.decodeString(keyData);
+        String encCurveName = KeyEntryResolver.decodeString(keyData, ECDSAPublicKeyEntryDecoder.MAX_CURVE_NAME_LENGTH);
         if (!keyCurveName.equals(encCurveName)) {
             throw new InvalidKeySpecException("Mismatched key curve name (" + keyCurveName + ") vs. encoded one (" + encCurveName + ")");
         }
 
-        byte[] pubKey = KeyEntryResolver.readRLEBytes(keyData);
+        byte[] pubKey = KeyEntryResolver.readRLEBytes(keyData, ECDSAPublicKeyEntryDecoder.MAX_ALLOWED_POINT_SIZE);
         Objects.requireNonNull(pubKey, "No public point");  // TODO validate it is a valid ECPoint
         BigInteger s = KeyEntryResolver.decodeBigInt(keyData);
         ECParameterSpec params = curve.getParameters();
-        return generatePrivateKey(new ECPrivateKeySpec(s, params));
+        try {
+            return generatePrivateKey(new ECPrivateKeySpec(s, params));
+        } finally {
+            // get rid of sensitive data a.s.a.p
+            s = null;
+        }
     }
 
     @Override

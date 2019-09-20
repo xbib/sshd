@@ -19,13 +19,180 @@
 
 package org.apache.sshd.common.signature;
 
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeMap;
+
 import org.apache.sshd.common.BuiltinFactory;
+import org.apache.sshd.common.NamedFactory;
+import org.apache.sshd.common.NamedResource;
+import org.apache.sshd.common.config.keys.KeyUtils;
+import org.apache.sshd.common.keyprovider.KeyPairProvider;
+import org.apache.sshd.common.util.GenericUtils;
 
 /**
  * @author <a href="mailto:dev@mina.apache.org">Apache MINA SSHD Project</a>
  */
-// CHECKSTYLE:OFF
 public interface SignatureFactory extends BuiltinFactory<Signature> {
-    // nothing extra
+    /**
+     * ECC signature types in ascending order of preference (i.e., most preferred 1st)
+     */
+    List<String> ECC_SIGNATURE_TYPE_PREFERENCES =
+        Collections.unmodifiableList(
+            Arrays.asList(
+                    KeyPairProvider.ECDSA_SHA2_NISTP521,
+                    KeyPairProvider.ECDSA_SHA2_NISTP384,
+                    KeyPairProvider.ECDSA_SHA2_NISTP256));
+
+    /**
+     * RSA signature types in ascending order of preference (i.e., most preferred 1st)
+     */
+    List<String> RSA_SIGNATURE_TYPE_PREFERENCES =
+        Collections.unmodifiableList(
+            Arrays.asList(
+                KeyUtils.RSA_SHA512_KEY_TYPE_ALIAS,
+                KeyUtils.RSA_SHA256_KEY_TYPE_ALIAS,
+                KeyPairProvider.SSH_RSA));
+
+    /**
+     * @param provided The provided signature key types
+     * @param factories The available signature factories
+     * @return A {@link List} of the matching available factories names
+     * that are also listed as provided ones - in the same <U>order</U>
+     * of preference as they appear in the available listing. May be
+     * empty if no provided signature key types, or no available ones
+     * or no match found.
+     * @see #resolveSignatureFactoryNamesProposal(Iterable, Collection)
+     */
+    static List<String> resolveSignatureFactoriesProposal(
+            Iterable<String> provided, Collection<? extends NamedFactory<Signature>> factories) {
+        return resolveSignatureFactoryNamesProposal(provided, NamedResource.getNameList(factories));
+    }
+
+    /**
+     * @param provided The provided signature key types
+     * @param available The available signature factories names
+     * @return A {@link List} of the matching available factories names
+     * that are also listed as provided ones - in the same <U>order</U>
+     * of preference as they appear in the available listing. May be
+     * empty if no provided signature key types, or no available ones
+     * or no match found.
+     */
+    static List<String> resolveSignatureFactoryNamesProposal(
+            Iterable<String> provided, Collection<String> available) {
+        if ((provided == null) || GenericUtils.isEmpty(available)) {
+            return Collections.emptyList();
+        }
+
+        // We want to preserve the original available order as it indicates the preference
+        Set<String> providedKeys = new HashSet<>();
+        for (String providedType : provided) {
+            Collection<String> equivTypes =
+                KeyUtils.getAllEquivalentKeyTypes(providedType);
+            providedKeys.addAll(equivTypes);
+        }
+
+        if (GenericUtils.isEmpty(providedKeys)) {
+            return Collections.emptyList();
+        }
+
+        List<String> supported = new ArrayList<>(available);
+        for (int index = 0; index < supported.size(); index++) {
+            String kt = supported.get(index);
+            if (!providedKeys.contains(kt)) {
+                supported.remove(index);
+                index--;    // compensate for auto-increment
+            }
+        }
+
+        return supported;
+    }
+
+    // returns -1 or > size() if append to end
+    static int resolvePreferredSignaturePosition(
+            List<? extends NamedFactory<Signature>> factories, NamedFactory<Signature> factory) {
+        if (GenericUtils.isEmpty(factories)) {
+            return -1;  // just add it to the end
+        }
+
+        String name = factory.getName();
+        if (KeyPairProvider.SSH_RSA.equalsIgnoreCase(name)) {
+            return -1;
+        }
+
+        int pos = RSA_SIGNATURE_TYPE_PREFERENCES.indexOf(name);
+        if (pos >= 0) {
+            Map<String, Integer> posMap = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+            for (int index = 0, count = factories.size(); index < count; index++) {
+                NamedFactory<Signature> f = factories.get(index);
+                String keyType = f.getName();
+                String canonicalName = KeyUtils.getCanonicalKeyType(keyType);
+                if (!KeyPairProvider.SSH_RSA.equalsIgnoreCase(canonicalName)) {
+                    continue;   // debug breakpoint
+                }
+
+                posMap.put(keyType, index);
+            }
+
+            return resolvePreferredSignaturePosition(RSA_SIGNATURE_TYPE_PREFERENCES, pos, posMap);
+        }
+
+        pos = ECC_SIGNATURE_TYPE_PREFERENCES.indexOf(name);
+        if (pos >= 0) {
+            Map<String, Integer> posMap = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+            for (int index = 0, count = factories.size(); index < count; index++) {
+                NamedFactory<Signature> f = factories.get(index);
+                String keyType = f.getName();
+                if (!ECC_SIGNATURE_TYPE_PREFERENCES.contains(keyType)) {
+                    continue;   // debug breakpoint
+                }
+
+                posMap.put(keyType, index);
+            }
+
+            return resolvePreferredSignaturePosition(ECC_SIGNATURE_TYPE_PREFERENCES, pos, posMap);
+        }
+
+        return -1;  // no special preference - stick it as last
+    }
+
+    static int resolvePreferredSignaturePosition(
+            List<String> preferredOrder, int prefValue, Map<String, Integer> posMap) {
+        if (GenericUtils.isEmpty(preferredOrder) || (prefValue < 0) || GenericUtils.isEmpty(posMap)) {
+            return -1;
+        }
+
+        int posValue = -1;
+        for (Map.Entry<String, Integer> pe : posMap.entrySet()) {
+            String name = pe.getKey();
+            int order = preferredOrder.indexOf(name);
+            if (order < 0) {
+                continue;   // should not happen, but tolerate
+            }
+
+            Integer curIndex = pe.getValue();
+            int resIndex;
+            if (order < prefValue) {
+                resIndex = curIndex.intValue() + 1;
+            } else if (order > prefValue) {
+                resIndex = curIndex.intValue(); // by using same index we insert in front of it in effect
+            } else {
+                continue;   // should not happen, but tolerate
+            }
+
+            // Preferred factories should be as close as possible to the beginning of the list
+            if ((posValue < 0) || (resIndex < posValue)) {
+                posValue = resIndex;
+            }
+        }
+
+        return posValue;
+    }
 }
-//CHECKSTYLE:ON
+

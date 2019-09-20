@@ -41,6 +41,7 @@ import org.apache.sshd.common.config.keys.KeyEntryResolver;
 import org.apache.sshd.common.config.keys.KeyUtils;
 import org.apache.sshd.common.config.keys.impl.AbstractPrivateKeyEntryDecoder;
 import org.apache.sshd.common.keyprovider.KeyPairProvider;
+import org.apache.sshd.common.session.SessionContext;
 import org.apache.sshd.common.util.security.SecurityUtils;
 
 /**
@@ -54,8 +55,9 @@ public class OpenSSHDSSPrivateKeyEntryDecoder extends AbstractPrivateKeyEntryDec
     }
 
     @Override
-    public DSAPrivateKey decodePrivateKey(String keyType, FilePasswordProvider passwordProvider, InputStream keyData)
-            throws IOException, GeneralSecurityException {
+    public DSAPrivateKey decodePrivateKey(
+            SessionContext session, String keyType, FilePasswordProvider passwordProvider, InputStream keyData)
+                throws IOException, GeneralSecurityException {
         if (!KeyPairProvider.SSH_DSS.equals(keyType)) { // just in case we were invoked directly
             throw new InvalidKeySpecException("Unexpected key type: " + keyType);
         }
@@ -67,7 +69,16 @@ public class OpenSSHDSSPrivateKeyEntryDecoder extends AbstractPrivateKeyEntryDec
         Objects.requireNonNull(y, "No public key data");   // TODO run some validation on it
         BigInteger x = KeyEntryResolver.decodeBigInt(keyData);
 
-        return generatePrivateKey(new DSAPrivateKeySpec(x, p, q, g));
+        try {
+            return generatePrivateKey(new DSAPrivateKeySpec(x, p, q, g));
+        } finally {
+            // get rid of sensitive data a.s.a.p
+            p = null;
+            q = null;
+            g = null;
+            y = null;
+            x = null;
+        }
     }
 
     @Override

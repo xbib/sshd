@@ -18,12 +18,12 @@
  */
 package org.apache.sshd.fs;
 
-import org.apache.sshd.client.subsystem.sftp.SftpClient;
-
 import java.io.IOException;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Path;
 import java.util.Iterator;
+
+import org.apache.sshd.client.subsystem.sftp.SftpClient;
 
 /**
  * Implements a remote {@link DirectoryStream}

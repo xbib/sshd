@@ -20,11 +20,10 @@ package org.apache.sshd.client;
 
 import org.apache.sshd.client.config.hosts.HostConfigEntryResolver;
 import org.apache.sshd.client.config.keys.ClientIdentityLoader;
+import org.apache.sshd.client.config.keys.ClientIdentityLoaderManager;
 import org.apache.sshd.client.session.ClientProxyConnectorHolder;
-import org.apache.sshd.client.subsystem.sftp.SftpClientFactoryManager;
 import org.apache.sshd.common.FactoryManager;
-import org.apache.sshd.common.config.keys.FilePasswordProvider;
-import org.apache.sshd.common.scp.ScpFileOpenerHolder;
+import org.apache.sshd.common.config.keys.FilePasswordProviderManager;
 
 /**
  * The <code>ClientFactoryManager</code> enable the retrieval of additional
@@ -34,19 +33,32 @@ import org.apache.sshd.common.scp.ScpFileOpenerHolder;
  */
 public interface ClientFactoryManager
         extends FactoryManager,
-                SftpClientFactoryManager,
-                ScpFileOpenerHolder,
                 ClientProxyConnectorHolder,
+                FilePasswordProviderManager,
+                ClientIdentityLoaderManager,
                 ClientAuthenticationManager {
 
     /**
      * Key used to retrieve the value of the client identification string.
      * If set, then it is <U>appended</U> to the (standard) &quot;SSH-2.0-&quot;
      * prefix. Otherwise a default is sent that consists of &quot;SSH-2.0-&quot;
-     * plus the current SSHD core artifact name and version in uppercase - e.g.,
-     * &quot;SSH-2.0-SSHD-CORE-1.0.0&quot;
+     * plus the current SSHD artifact name and version in uppercase - e.g.,
+     * &quot;SSH-2.0-APACHE-SSHD-1.0.0&quot;
      */
     String CLIENT_IDENTIFICATION = "client-identification";
+
+    /**
+     * Whether to send the identification string immediately upon session connection
+     * being established or wait for the peer's identification before sending our own.
+     *
+     * @see <A HREF="https://tools.ietf.org/html/rfc4253#section-4.2">RFC 4253 - section 4.2 - Protocol Version Exchange</A>
+     */
+    String SEND_IMMEDIATE_IDENTIFICATION = "send-immediate-identification";
+
+    /**
+     * Value of {@value #SEND_IMMEDIATE_IDENTIFICATION} if none configured
+     */
+    boolean DEFAULT_SEND_IMMEDIATE_IDENTIFICATION = true;
 
     /**
      * Key used to set the heartbeat interval in milliseconds (0 to disable = default)
@@ -64,14 +76,24 @@ public interface ClientFactoryManager
     String HEARTBEAT_REQUEST = "heartbeat-request";
 
     /**
-     * Default value for {@link ClientFactoryManager#HEARTBEAT_REQUEST} is none configured
+     * Default value for {@value #HEARTBEAT_REQUEST} is none configured
      */
     String DEFAULT_KEEP_ALIVE_HEARTBEAT_STRING = "keepalive@sshd.apache.org";
 
     /**
+     * Key used to indicate that the heartbeat request is also
+     * expecting a reply - time in <U>milliseconds</U> to wait for
+     * the reply. If non-positive then no reply is expected (nor requested).
+     */
+    String HEARTBEAT_REPLY_WAIT = "heartbeat-reply-wait";
+
+    /** Default value for {@value #HEARTBEAT_REPLY_WAIT} if none is configured */
+    long DEFAULT_HEARTBEAT_REPLY_WAIT = 0L;
+
+    /**
      * Whether to ignore invalid identities files when pre-initializing
      * the client session
-     * @see ClientIdentityLoader#isValidLocation(String)
+     * @see ClientIdentityLoader#isValidLocation(org.apache.sshd.common.NamedResource)
      */
     String IGNORE_INVALID_IDENTITIES = "ignore-invalid-identities";
 
@@ -87,21 +109,4 @@ public interface ClientFactoryManager
     HostConfigEntryResolver getHostConfigEntryResolver();
 
     void setHostConfigEntryResolver(HostConfigEntryResolver resolver);
-
-    /**
-     * @return The {@link ClientIdentityLoader} to use in order to load client
-     * key pair identities - never {@code null}
-     */
-    ClientIdentityLoader getClientIdentityLoader();
-
-    void setClientIdentityLoader(ClientIdentityLoader loader);
-
-    /**
-     * @return The {@link FilePasswordProvider} to use if need to load encrypted
-     * identities keys - never {@code null}
-     * @see FilePasswordProvider#EMPTY
-     */
-    FilePasswordProvider getFilePasswordProvider();
-
-    void setFilePasswordProvider(FilePasswordProvider provider);
 }

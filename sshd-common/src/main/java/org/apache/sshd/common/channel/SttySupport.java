@@ -42,7 +42,7 @@ public final class SttySupport {
     public static final String DEFAULT_SSHD_STTY_COMMAND = "stty";
 
     private static final AtomicReference<String> STTY_COMMAND_HOLDER =
-            new AtomicReference<>(System.getProperty(SSHD_STTY_COMMAND_PROP, DEFAULT_SSHD_STTY_COMMAND));
+        new AtomicReference<>(System.getProperty(SSHD_STTY_COMMAND_PROP, DEFAULT_SSHD_STTY_COMMAND));
     private static final AtomicReference<String> TTY_PROPS_HOLDER = new AtomicReference<>(null);
     private static final AtomicLong TTY_PROPS_LAST_FETCHED_HOLDER = new AtomicLong(0L);
 
@@ -56,27 +56,27 @@ public final class SttySupport {
 
     public static Map<PtyMode, Integer> parsePtyModes(String stty) {
         Map<PtyMode, Integer> modes = new EnumMap<>(PtyMode.class);
-        for (PtyMode mode : PtyMode.values()) {
-            if (mode == PtyMode.TTY_OP_ISPEED || mode == PtyMode.TTY_OP_OSPEED) {
+        for (PtyMode mode : PtyMode.MODES) {
+            if ((mode == PtyMode.TTY_OP_ISPEED) || (mode == PtyMode.TTY_OP_OSPEED)) {
                 // TODO ...
                 continue;
+            }
+
+            String str = mode.name().toLowerCase();
+            // Are we looking for a character?
+            if (str.charAt(0) == 'v') {
+                str = str.substring(1);
+                int v = findChar(stty, str);
+                if ((v < 0) && "reprint".equals(str)) {
+                    v = findChar(stty, "rprnt");
+                }
+                if (v >= 0) {
+                    modes.put(mode, v);
+                }
             } else {
-                String str = mode.name().toLowerCase();
-                // Are we looking for a character?
-                if (str.charAt(0) == 'v') {
-                    str = str.substring(1);
-                    int v = findChar(stty, str);
-                    if (v < 0 && "reprint".equals(str)) {
-                        v = findChar(stty, "rprnt");
-                    }
-                    if (v >= 0) {
-                        modes.put(mode, v);
-                    }
-                } else {
-                    int v = findFlag(stty, str);
-                    if (v >= 0) {
-                        modes.put(mode, v);
-                    }
+                int v = findFlag(stty, str);
+                if (v >= 0) {
+                    modes.put(mode, v);
                 }
             }
         }
@@ -186,8 +186,7 @@ public final class SttySupport {
         }
     }
 
-    private static int getTerminalProperty(String prop)
-            throws IOException, InterruptedException {
+    public static int getTerminalProperty(String prop) throws IOException, InterruptedException {
         // need to be able handle both output formats:
         // speed 9600 baud; 24 rows; 140 columns;
         // and:
@@ -196,11 +195,11 @@ public final class SttySupport {
             String str = tok.nextToken().trim();
 
             if (str.startsWith(prop)) {
-                int index = str.lastIndexOf(" ");
+                int index = str.lastIndexOf(' ');
 
                 return Integer.parseInt(str.substring(index).trim());
             } else if (str.endsWith(prop)) {
-                int index = str.indexOf(" ");
+                int index = str.indexOf(' ');
 
                 return Integer.parseInt(str.substring(0, index).trim());
             }
@@ -210,7 +209,7 @@ public final class SttySupport {
     }
 
     public static String getTtyProps() throws IOException, InterruptedException {
-        // tty properties are cached so we don't have to worry too much about getting term widht/height
+        // tty properties are cached so we don't have to worry too much about getting term width/height
         long now = System.currentTimeMillis();
         long lastFetched = TTY_PROPS_LAST_FETCHED_HOLDER.get();
         if ((TTY_PROPS_HOLDER.get() == null) || ((now - lastFetched) > 1000L)) {
@@ -231,8 +230,7 @@ public final class SttySupport {
      * @throws InterruptedException If interrupted while awaiting command execution
      * @see #exec(String)
      */
-    public static String stty(final String args)
-            throws IOException, InterruptedException {
+    public static String stty(String args) throws IOException, InterruptedException {
         return exec("stty " + args + " < /dev/tty").trim();
     }
 

@@ -20,22 +20,31 @@
 package org.apache.sshd.client.auth;
 
 import java.security.KeyPair;
-import java.util.Collection;
-import java.util.Collections;
 import java.util.Comparator;
-import java.util.Iterator;
-import java.util.LinkedList;
 import java.util.List;
 
 import org.apache.sshd.client.auth.password.PasswordIdentityProvider;
 import org.apache.sshd.common.config.keys.KeyUtils;
 import org.apache.sshd.common.keyprovider.KeyIdentityProvider;
-import org.apache.sshd.common.util.GenericUtils;
+import org.apache.sshd.common.session.SessionContext;
+import org.apache.sshd.common.util.helper.LazyMatchingTypeIterable;
 
 /**
  * @author <a href="mailto:dev@mina.apache.org">Apache MINA SSHD Project</a>
  */
 public interface AuthenticationIdentitiesProvider extends KeyIdentityProvider, PasswordIdentityProvider {
+
+    /**
+     * Compares 2 password identities - returns zero ONLY if <U>both</U> compared
+     * objects are {@link String}s and equal to each other
+     */
+    Comparator<Object> PASSWORD_IDENTITY_COMPARATOR = (o1, o2) -> {
+        if (!(o1 instanceof String) || !(o2 instanceof String)) {
+            return -1;
+        } else {
+            return ((String) o1).compareTo((String) o2);
+        }
+    };
 
     /**
      * Compares 2 {@link KeyPair} identities - returns zero ONLY if <U>both</U> compared
@@ -71,42 +80,21 @@ public interface AuthenticationIdentitiesProvider extends KeyIdentityProvider, P
      * @param identities The {@link Iterable} identities - OK if {@code null}/empty
      * @return An {@link AuthenticationIdentitiesProvider} wrapping the identities
      */
-    static AuthenticationIdentitiesProvider wrap(Iterable<?> identities) {
+    static AuthenticationIdentitiesProvider wrapIdentities(Iterable<?> identities) {
         return new AuthenticationIdentitiesProvider() {
             @Override
-            public Iterable<KeyPair> loadKeys() {
-                return selectIdentities(KeyPair.class);
+            public Iterable<KeyPair> loadKeys(SessionContext session) {
+                return LazyMatchingTypeIterable.lazySelectMatchingTypes(identities, KeyPair.class);
             }
 
             @Override
             public Iterable<String> loadPasswords() {
-                return selectIdentities(String.class);
+                return LazyMatchingTypeIterable.lazySelectMatchingTypes(identities, String.class);
             }
 
             @Override
             public Iterable<?> loadIdentities() {
-                return selectIdentities(Object.class);
-            }
-
-            // NOTE: returns a NEW Collection on every call so that the original
-            //      identities remain unchanged
-            private <T> Collection<T> selectIdentities(Class<T> type) {
-                Collection<T> matches = null;
-                for (Iterator<?> iter = GenericUtils.iteratorOf(identities); iter.hasNext();) {
-                    Object o = iter.next();
-                    Class<?> t = o.getClass();
-                    if (!type.isAssignableFrom(t)) {
-                        continue;
-                    }
-
-                    if (matches == null) {
-                        matches = new LinkedList<>();
-                    }
-
-                    matches.add(type.cast(o));
-                }
-
-                return (matches == null) ? Collections.<T>emptyList() : matches;
+                return LazyMatchingTypeIterable.lazySelectMatchingTypes(identities, Object.class);
             }
         };
     }

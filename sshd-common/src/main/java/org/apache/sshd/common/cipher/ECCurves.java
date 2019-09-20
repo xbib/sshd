@@ -45,6 +45,8 @@ import org.apache.sshd.common.config.keys.KeyEntryResolver;
 import org.apache.sshd.common.digest.BuiltinDigests;
 import org.apache.sshd.common.digest.Digest;
 import org.apache.sshd.common.digest.DigestFactory;
+import org.apache.sshd.common.keyprovider.KeySizeIndicator;
+import org.apache.sshd.common.keyprovider.KeyTypeIndicator;
 import org.apache.sshd.common.util.GenericUtils;
 import org.apache.sshd.common.util.NumberUtils;
 import org.apache.sshd.common.util.ValidateUtils;
@@ -55,7 +57,7 @@ import org.apache.sshd.common.util.security.SecurityUtils;
  *
  * @author <a href="mailto:dev@mina.apache.org">Apache MINA SSHD Project</a>
  */
-public enum ECCurves implements NamedResource, OptionalFeature {
+public enum ECCurves implements KeyTypeIndicator, KeySizeIndicator, NamedResource, OptionalFeature {
     nistp256(Constants.NISTP256, new int[]{1, 2, 840, 10045, 3, 1, 7},
             new ECParameterSpec(
                     new EllipticCurve(
@@ -106,25 +108,21 @@ public enum ECCurves implements NamedResource, OptionalFeature {
      * A {@link Set} of all the known curves
      */
     public static final Set<ECCurves> VALUES =
-            Collections.unmodifiableSet(EnumSet.allOf(ECCurves.class));
+        Collections.unmodifiableSet(EnumSet.allOf(ECCurves.class));
 
     /**
      * A {@link Set} of all the known curves names
      */
     public static final NavigableSet<String> NAMES =
-            Collections.unmodifiableNavigableSet(GenericUtils.mapSort(
-                    VALUES,
-                    ECCurves::getName,
-                    String.CASE_INSENSITIVE_ORDER));
+        Collections.unmodifiableNavigableSet(
+            GenericUtils.mapSort(VALUES, ECCurves::getName, String.CASE_INSENSITIVE_ORDER));
 
     /**
      * A {@link Set} of all the known curves key types
      */
     public static final NavigableSet<String> KEY_TYPES =
-            Collections.unmodifiableNavigableSet(GenericUtils.mapSort(
-                    VALUES,
-                    ECCurves::getKeyType,
-                    String.CASE_INSENSITIVE_ORDER));
+        Collections.unmodifiableNavigableSet(
+            GenericUtils.mapSort(VALUES, ECCurves::getKeyType, String.CASE_INSENSITIVE_ORDER));
 
     public static final Comparator<ECCurves> BY_KEY_SIZE = (o1, o2) -> {
         int k1 = (o1 == null) ? Integer.MAX_VALUE : o1.getKeySize();
@@ -133,9 +131,9 @@ public enum ECCurves implements NamedResource, OptionalFeature {
     };
 
     public static final List<ECCurves> SORTED_KEY_SIZE =
-            Collections.unmodifiableList(VALUES.stream()
-                    .sorted(BY_KEY_SIZE)
-                    .collect(Collectors.toList()));
+        Collections.unmodifiableList(VALUES.stream()
+            .sorted(BY_KEY_SIZE)
+            .collect(Collectors.toList()));
 
     private final String name;
     private final String keyType;
@@ -157,7 +155,7 @@ public enum ECCurves implements NamedResource, OptionalFeature {
         this.digestFactory = Objects.requireNonNull(digestFactory, "No digestFactory");
     }
 
-    @Override   // The curve name
+    @Override   // The curve's standard name
     public final String getName() {
         return name;
     }
@@ -170,9 +168,7 @@ public enum ECCurves implements NamedResource, OptionalFeature {
         return oidValue;
     }
 
-    /**
-     * @return The standard key type used to represent this curve
-     */
+    @Override
     public final String getKeyType() {
         return keyType;
     }
@@ -186,9 +182,7 @@ public enum ECCurves implements NamedResource, OptionalFeature {
         return params;
     }
 
-    /**
-     * @return The size (in bits) of the key
-     */
+    @Override
     public final int getKeySize() {
         return keySize;
     }
@@ -227,8 +221,7 @@ public enum ECCurves implements NamedResource, OptionalFeature {
     }
 
     /**
-     * @param name The curve name (case <U>insensitive</U> - ignored if
-     *             {@code null}/empty
+     * @param name The curve name (case <U>insensitive</U> - ignored if {@code null}/empty
      * @return The matching {@link ECCurves} instance - {@code null} if no
      * match found
      */
@@ -430,13 +423,17 @@ public enum ECCurves implements NamedResource, OptionalFeature {
         public static final String NISTP256 = "nistp256";
         public static final String NISTP384 = "nistp384";
         public static final String NISTP521 = "nistp521";
+
+        private Constants() {
+            throw new UnsupportedOperationException("No instance allowed");
+        }
     }
 
     /**
      * The various {@link ECPoint} representation compression indicators
      *
      * @author <a href="mailto:dev@mina.apache.org">Apache MINA SSHD Project</a>
-     * @see <A HREF="https://www.ietf.org/rfc/rfc5480.txt">RFC-5480 - section 2.2</A>
+     * @see <A HREF="https://tools.ietf.org/html/rfc5480#section-2.2">RFC-5480 - section 2.2</A>
      */
     public enum ECPointCompression {
         // see http://tools.ietf.org/html/draft-jivsov-ecc-compact-00
@@ -499,7 +496,7 @@ public enum ECCurves implements NamedResource, OptionalFeature {
         };
 
         public static final Set<ECPointCompression> VALUES =
-                Collections.unmodifiableSet(EnumSet.allOf(ECPointCompression.class));
+            Collections.unmodifiableSet(EnumSet.allOf(ECPointCompression.class));
 
         private final byte indicatorValue;
 
@@ -554,6 +551,8 @@ public enum ECCurves implements NamedResource, OptionalFeature {
                 byte[] tmp = new byte[numElements];
                 System.arraycopy(vp, startIndex, tmp, numElements - vLen, vLen);
                 vp = tmp;
+                startIndex = 0;
+                vLen = vp.length;
             }
 
             s.write(vp, startIndex, vLen);

@@ -18,15 +18,17 @@
  */
 package org.apache.sshd.common.io;
 
+import java.util.Deque;
 import java.util.Iterator;
+import java.util.LinkedList;
 import java.util.ServiceLoader;
-import java.util.concurrent.ExecutorService;
 
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import org.apache.sshd.common.Factory;
 import org.apache.sshd.common.FactoryManager;
 import org.apache.sshd.common.util.GenericUtils;
-import org.apache.sshd.common.util.threads.ExecutorServiceConfigurer;
+import org.apache.sshd.common.util.threads.CloseableExecutorService;
+import org.apache.logging.log4j.Logger;
+import org.apache.logging.log4j.LogManager;
 
 /**
  * @author <a href="mailto:dev@mina.apache.org">Apache MINA SSHD Project</a>
@@ -36,92 +38,151 @@ public class DefaultIoServiceFactoryFactory extends AbstractIoServiceFactoryFact
 
     private IoServiceFactoryFactory factory;
 
-    public DefaultIoServiceFactoryFactory() {
-        this(null, true);
+    protected DefaultIoServiceFactoryFactory() {
+        this(null);
     }
 
-    protected DefaultIoServiceFactoryFactory(ExecutorService executors, boolean shutdownOnExit) {
-        super(executors, shutdownOnExit);
+    protected DefaultIoServiceFactoryFactory(Factory<CloseableExecutorService> factory) {
+        super(factory);
     }
 
     @Override
     public IoServiceFactory create(FactoryManager manager) {
-        return getFactory().create(manager);
+        IoServiceFactoryFactory factoryInstance = getIoServiceProvider();
+        return factoryInstance.create(manager);
     }
 
-    private IoServiceFactoryFactory getFactory() {
+    /**
+     * @return The actual {@link IoServiceFactoryFactory} being delegated
+     */
+    public IoServiceFactoryFactory getIoServiceProvider() {
         synchronized (this) {
+            if (factory != null) {
+                return factory;
+            }
+
+            factory = newInstance(IoServiceFactoryFactory.class);
             if (factory == null) {
-                factory = newInstance(IoServiceFactoryFactory.class);
-                if (factory instanceof ExecutorServiceConfigurer) {
-                    ExecutorServiceConfigurer configurer = (ExecutorServiceConfigurer) factory;
-                    configurer.setExecutorService(getExecutorService());
-                    configurer.setShutdownOnExit(isShutdownOnExit());
-                }
+                factory = BuiltinIoServiceFactoryFactories.NIO2.create();
+                log.info("No detected/configured " + IoServiceFactoryFactory.class.getSimpleName()
+                    + " using " + factory.getClass().getSimpleName());
+            } else {
+                log.info("Using {}", factory.getClass().getSimpleName());
+            }
+
+            Factory<CloseableExecutorService> executorServiceFactory = getExecutorServiceFactory();
+            if (executorServiceFactory != null) {
+                factory.setExecutorServiceFactory(executorServiceFactory);
             }
         }
+
         return factory;
     }
 
     public static <T extends IoServiceFactoryFactory> T newInstance(Class<T> clazz) {
-        String factory = System.getProperty(clazz.getName());
+        String propName = clazz.getName();
+        String factory = System.getProperty(propName);
         if (!GenericUtils.isEmpty(factory)) {
             return newInstance(clazz, factory);
         }
 
-        ClassLoader cl = Thread.currentThread().getContextClassLoader();
+        Thread currentThread = Thread.currentThread();
+        ClassLoader cl = currentThread.getContextClassLoader();
         if (cl != null) {
-            T t = tryLoad(ServiceLoader.load(clazz, cl));
+            T t = tryLoad(propName, ServiceLoader.load(clazz, cl));
             if (t != null) {
                 return t;
             }
         }
-        if (cl != DefaultIoServiceFactoryFactory.class.getClassLoader()) {
-            T t = tryLoad(ServiceLoader.load(clazz, DefaultIoServiceFactoryFactory.class.getClassLoader()));
+
+        ClassLoader clDefault = DefaultIoServiceFactoryFactory.class.getClassLoader();
+        if (cl != clDefault) {
+            T t = tryLoad(propName, ServiceLoader.load(clazz, clDefault));
             if (t != null) {
                 return t;
             }
         }
-        throw new IllegalStateException("Could not find a valid sshd io provider");
+
+        return null;
     }
 
-    public static <T extends IoServiceFactoryFactory> T tryLoad(ServiceLoader<T> loader) {
+    public static <T extends IoServiceFactoryFactory> T tryLoad(String propName, ServiceLoader<T> loader) {
         Iterator<T> it = loader.iterator();
+        Deque<T> services = new LinkedList<>();
         try {
             while (it.hasNext()) {
                 try {
-                    return it.next();
+                    T instance = it.next();
+                    services.add(instance);
                 } catch (Throwable t) {
-                    LOGGER.trace("Exception while loading factory from ServiceLoader", t);
+                    LOGGER.warn("Exception while instantiating factory from ServiceLoader", t);
                 }
             }
         } catch (Throwable t) {
-            LOGGER.trace("Exception while loading factory from ServiceLoader", t);
+            LOGGER.warn("Exception while loading factory from ServiceLoader", t);
         }
-        return null;
+
+        int numDetected = services.size();
+        if (numDetected <= 0) {
+            return null;
+        }
+
+        if (numDetected != 1) {
+            LOGGER.error("Multiple ({}) registered instances detected:", numDetected);
+            for (T s : services) {
+                LOGGER.error("===> {}", s.getClass().getName());
+            }
+            throw new IllegalStateException("Multiple (" + numDetected + ")"
+                + " registered " + IoServiceFactoryFactory.class.getSimpleName() + " instances detected."
+                + " Please use -D" + propName + "=...factory class.. to select one"
+                + " or remove the extra providers from the classpath");
+        }
+
+        return services.removeFirst();
     }
 
     public static <T extends IoServiceFactoryFactory> T newInstance(Class<T> clazz, String factory) {
         BuiltinIoServiceFactoryFactories builtin = BuiltinIoServiceFactoryFactories.fromFactoryName(factory);
         if (builtin != null) {
-            return clazz.cast(builtin.create());
+            IoServiceFactoryFactory builtinInstance = builtin.create();
+            return clazz.cast(builtinInstance);
         }
 
-        ClassLoader cl = Thread.currentThread().getContextClassLoader();
+        Thread currentThread = Thread.currentThread();
+        ClassLoader cl = currentThread.getContextClassLoader();
         if (cl != null) {
             try {
-                return clazz.cast(cl.loadClass(factory).newInstance());
+                Class<?> loaded = cl.loadClass(factory);
+                Object factoryInstance = loaded.newInstance();
+                return clazz.cast(factoryInstance);
             } catch (Throwable t) {
                 LOGGER.trace("Exception while loading factory " + factory, t);
             }
         }
-        if (cl != DefaultIoServiceFactoryFactory.class.getClassLoader()) {
+
+        ClassLoader clDefault = DefaultIoServiceFactoryFactory.class.getClassLoader();
+        if (cl != clDefault) {
             try {
-                return clazz.cast(DefaultIoServiceFactoryFactory.class.getClassLoader().loadClass(factory).newInstance());
+                Class<?> loaded = clDefault.loadClass(factory);
+                Object factoryInstance = loaded.newInstance();
+                return clazz.cast(factoryInstance);
             } catch (Throwable t) {
                 LOGGER.trace("Exception while loading factory " + factory, t);
             }
         }
         throw new IllegalStateException("Unable to create instance of class " + factory);
+    }
+
+    private static final class LazyDefaultIoServiceFactoryFactoryHolder {
+        private static final DefaultIoServiceFactoryFactory INSTANCE = new DefaultIoServiceFactoryFactory();
+
+        private LazyDefaultIoServiceFactoryFactoryHolder() {
+            throw new UnsupportedOperationException("No instance allowed");
+        }
+    }
+
+    @SuppressWarnings("synthetic-access")
+    public static DefaultIoServiceFactoryFactory getDefaultIoServiceFactoryFactoryInstance() {
+        return LazyDefaultIoServiceFactoryFactoryHolder.INSTANCE;
     }
 }

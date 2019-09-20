@@ -22,6 +22,7 @@ package org.apache.sshd.common.config.keys;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.StreamCorruptedException;
 import java.math.BigInteger;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
@@ -32,7 +33,10 @@ import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.PrivateKey;
 import java.security.PublicKey;
+import java.util.AbstractMap.SimpleImmutableEntry;
+import java.util.Map;
 
+import org.apache.sshd.common.util.NumberUtils;
 import org.apache.sshd.common.util.io.IoUtils;
 
 /**
@@ -40,7 +44,8 @@ import org.apache.sshd.common.util.io.IoUtils;
  * @param <PRV> Type of {@link PrivateKey}
  * @author <a href="mailto:dev@mina.apache.org">Apache MINA SSHD Project</a>
  */
-public interface KeyEntryResolver<PUB extends PublicKey, PRV extends PrivateKey> extends IdentityResourceLoader<PUB, PRV> {
+public interface KeyEntryResolver<PUB extends PublicKey, PRV extends PrivateKey>
+        extends IdentityResourceLoader<PUB, PRV> {
     /**
      * @param keySize Key size in bits
      * @return A {@link KeyPair} with the specified key size
@@ -71,10 +76,12 @@ public interface KeyEntryResolver<PUB extends PublicKey, PRV extends PrivateKey>
         if (pubOriginal != null) {
             Class<?> orgType = pubOriginal.getClass();
             if (!pubExpected.isAssignableFrom(orgType)) {
-                throw new InvalidKeyException("Mismatched public key types: expected=" + pubExpected.getSimpleName() + ", actual=" + orgType.getSimpleName());
+                throw new InvalidKeyException(
+                    "Mismatched public key types: expected=" + pubExpected.getSimpleName() + ", actual=" + orgType.getSimpleName());
             }
 
-            pubCloned = clonePublicKey(pubExpected.cast(pubOriginal));
+            PUB castPub = pubExpected.cast(pubOriginal);
+            pubCloned = clonePublicKey(castPub);
         }
 
         PRV prvCloned = null;
@@ -83,10 +90,12 @@ public interface KeyEntryResolver<PUB extends PublicKey, PRV extends PrivateKey>
         if (prvOriginal != null) {
             Class<?> orgType = prvOriginal.getClass();
             if (!prvExpected.isAssignableFrom(orgType)) {
-                throw new InvalidKeyException("Mismatched private key types: expected=" + prvExpected.getSimpleName() + ", actual=" + orgType.getSimpleName());
+                throw new InvalidKeyException(
+                    "Mismatched private key types: expected=" + prvExpected.getSimpleName() + ", actual=" + orgType.getSimpleName());
             }
 
-            prvCloned = clonePrivateKey(prvExpected.cast(prvOriginal));
+            PRV castPrv = prvExpected.cast(prvOriginal);
+            prvCloned = clonePrivateKey(castPrv);
         }
 
         return new KeyPair(pubCloned, prvCloned);
@@ -155,25 +164,32 @@ public interface KeyEntryResolver<PUB extends PublicKey, PRV extends PrivateKey>
         return bytes;
     }
 
-    static String decodeString(InputStream s) throws IOException {
-        return decodeString(s, StandardCharsets.UTF_8);
+    static String decodeString(InputStream s, int maxChars) throws IOException {
+        return decodeString(s, StandardCharsets.UTF_8, maxChars);
     }
 
-    static String decodeString(InputStream s, String charset) throws IOException {
-        return decodeString(s, Charset.forName(charset));
+    static String decodeString(InputStream s, String charset, int maxChars) throws IOException {
+        return decodeString(s, Charset.forName(charset), maxChars);
     }
 
-    static String decodeString(InputStream s, Charset cs) throws IOException {
-        byte[] bytes = readRLEBytes(s);
+    static String decodeString(InputStream s, Charset cs, int maxChars) throws IOException {
+        byte[] bytes = readRLEBytes(s, maxChars * 4 /* in case UTF-8 with weird characters */);
         return new String(bytes, cs);
     }
 
     static BigInteger decodeBigInt(InputStream s) throws IOException {
-        return new BigInteger(readRLEBytes(s));
+        return new BigInteger(readRLEBytes(s, IdentityResourceLoader.MAX_BIGINT_OCTETS_COUNT));
     }
 
-    static byte[] readRLEBytes(InputStream s) throws IOException {
+    static byte[] readRLEBytes(InputStream s, int maxAllowed) throws IOException {
         int len = decodeInt(s);
+        if (len > maxAllowed) {
+            throw new StreamCorruptedException("Requested block length (" + len + ") exceeds max. allowed (" + maxAllowed + ")");
+        }
+        if (len < 0) {
+            throw new StreamCorruptedException("Negative block length requested: " + len);
+        }
+
         byte[] bytes = new byte[len];
         IoUtils.readFully(s, bytes);
         return bytes;
@@ -186,5 +202,87 @@ public interface KeyEntryResolver<PUB extends PublicKey, PRV extends PrivateKey>
                 | ((bytes[1] & 0xFF) << 16)
                 | ((bytes[2] & 0xFF) << 8)
                 | (bytes[3] & 0xFF);
+    }
+
+    static Map.Entry<String, Integer> decodeString(byte[] buf, int maxChars) {
+        return decodeString(buf, 0, NumberUtils.length(buf), maxChars);
+    }
+
+    static Map.Entry<String, Integer> decodeString(byte[] buf, int offset, int available, int maxChars) {
+        return decodeString(buf, offset, available, StandardCharsets.UTF_8, maxChars);
+    }
+
+    static Map.Entry<String, Integer> decodeString(byte[] buf, Charset cs, int maxChars) {
+        return decodeString(buf, 0, NumberUtils.length(buf), cs, maxChars);
+    }
+
+    /**
+     * Decodes a run-length encoded string
+     *
+     * @param buf The buffer with the data bytes
+     * @param offset The offset in the buffer to decode the string
+     * @param available The max. available data starting from the offset
+     * @param cs The {@link Charset} to use to decode the string
+     * @param maxChars Max. allowed characters in string - if more than
+     * that is encoded then an {@link IndexOutOfBoundsException} will be thrown
+     * @return The decoded string + the offset of the next byte after it
+     * @see #readRLEBytes(byte[], int, int, int)
+     */
+    static Map.Entry<String, Integer> decodeString(
+            byte[] buf, int offset, int available, Charset cs, int maxChars) {
+        Map.Entry<byte[], Integer> result =
+            readRLEBytes(buf, offset, available, maxChars * 4 /* in case UTF-8 with weird characters */);
+        byte[] bytes = result.getKey();
+        Integer nextOffset = result.getValue();
+        return new SimpleImmutableEntry<>(new String(bytes, cs), nextOffset);
+    }
+
+    static Map.Entry<byte[], Integer> readRLEBytes(byte[] buf, int maxAllowed) {
+        return readRLEBytes(buf, 0, NumberUtils.length(buf), maxAllowed);
+    }
+
+    /**
+     * Decodes a run-length encoded byte array
+     *
+     * @param buf The buffer with the data bytes
+     * @param offset The offset in the buffer to decode the array
+     * @param available The max. available data starting from the offset
+     * @param maxAllowed Max. allowed data in decoded buffer - if more than
+     * that is encoded then an {@link IndexOutOfBoundsException} will be thrown
+     * @return The decoded data buffer + the offset of the next byte after it
+     */
+    static Map.Entry<byte[], Integer> readRLEBytes(byte[] buf, int offset, int available, int maxAllowed) {
+        int len = decodeInt(buf, offset, available);
+        if (len > maxAllowed) {
+            throw new IndexOutOfBoundsException("Requested block length (" + len + ") exceeds max. allowed (" + maxAllowed + ")");
+        }
+        if (len < 0) {
+            throw new IndexOutOfBoundsException("Negative block length requested: " + len);
+        }
+
+        available -= Integer.BYTES;
+        if (len > available) {
+            throw new IndexOutOfBoundsException("Requested block length (" + len + ") exceeds remaing (" + available + ")");
+        }
+
+        byte[] bytes = new byte[len];
+        offset += Integer.BYTES;
+        System.arraycopy(buf, offset, bytes, 0, len);
+        return new SimpleImmutableEntry<>(bytes, Integer.valueOf(offset + len));
+    }
+
+    static int decodeInt(byte[] buf) {
+        return decodeInt(buf, 0, NumberUtils.length(buf));
+    }
+
+    static int decodeInt(byte[] buf, int offset, int available) {
+        if (available < Integer.BYTES) {
+            throw new IndexOutOfBoundsException("Available data length (" + available + ") cannot accommodate integer encoding");
+        }
+
+        return ((buf[offset] & 0xFF) << 24)
+                | ((buf[offset + 1] & 0xFF) << 16)
+                | ((buf[offset + 2] & 0xFF) << 8)
+                | (buf[offset + 3] & 0xFF);
     }
 }

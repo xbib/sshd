@@ -18,10 +18,7 @@
  */
 package org.apache.sshd.common.keyprovider;
 
-import java.io.File;
 import java.io.IOException;
-import java.io.InputStream;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.GeneralSecurityException;
 import java.security.KeyPair;
@@ -30,8 +27,10 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.Objects;
 
+import org.apache.sshd.common.session.SessionContext;
 import org.apache.sshd.common.util.GenericUtils;
-import org.apache.sshd.common.util.io.IoUtils;
+import org.apache.sshd.common.util.io.resource.IoResource;
+import org.apache.sshd.common.util.io.resource.PathResource;
 
 /**
  * This host key provider loads private keys from the specified files. The
@@ -64,10 +63,6 @@ public class FileKeyPairProvider extends AbstractResourceKeyPairProvider<Path> {
         return files;
     }
 
-    public void setFiles(Collection<File> files) {
-        setPaths(GenericUtils.map(files, File::toPath));
-    }
-
     public void setPaths(Collection<? extends Path> paths) {
         // use absolute path in order to have unique cache keys
         Collection<Path> resolved = GenericUtils.map(paths, Path::toAbsolutePath);
@@ -76,17 +71,18 @@ public class FileKeyPairProvider extends AbstractResourceKeyPairProvider<Path> {
     }
 
     @Override
-    public Iterable<KeyPair> loadKeys() {
-        return loadKeys(getPaths());
+    public Iterable<KeyPair> loadKeys(SessionContext session) {
+        return loadKeys(session, getPaths());
     }
 
     @Override
-    protected KeyPair doLoadKey(Path resource) throws IOException, GeneralSecurityException {
-        return super.doLoadKey((resource == null) ? null : resource.toAbsolutePath());
+    protected IoResource<Path> getIoResource(SessionContext session, Path resource) {
+        return (resource == null) ? null : new PathResource(resource);
     }
 
     @Override
-    protected InputStream openKeyPairResource(String resourceKey, Path resource) throws IOException {
-        return Files.newInputStream(resource, IoUtils.EMPTY_OPEN_OPTIONS);
+    protected Iterable<KeyPair> doLoadKeys(SessionContext session, Path resource)
+            throws IOException, GeneralSecurityException {
+        return super.doLoadKeys(session, (resource == null) ? null : resource.toAbsolutePath());
     }
 }

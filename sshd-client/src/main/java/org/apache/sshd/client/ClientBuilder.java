@@ -19,6 +19,7 @@
 
 package org.apache.sshd.client;
 
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.function.Function;
@@ -33,7 +34,7 @@ import org.apache.sshd.client.keyverifier.AcceptAllServerKeyVerifier;
 import org.apache.sshd.client.keyverifier.ServerKeyVerifier;
 import org.apache.sshd.common.BaseBuilder;
 import org.apache.sshd.common.NamedFactory;
-import org.apache.sshd.common.channel.Channel;
+import org.apache.sshd.common.channel.ChannelFactory;
 import org.apache.sshd.common.channel.RequestHandler;
 import org.apache.sshd.common.compression.BuiltinCompressions;
 import org.apache.sshd.common.compression.CompressionFactory;
@@ -41,12 +42,43 @@ import org.apache.sshd.common.config.keys.FilePasswordProvider;
 import org.apache.sshd.common.kex.DHFactory;
 import org.apache.sshd.common.kex.KeyExchange;
 import org.apache.sshd.common.session.ConnectionService;
-import org.apache.sshd.common.forward.ForwardedTcpipFactory;
+import org.apache.sshd.common.signature.BuiltinSignatures;
 
 /**
  * SshClient builder
  */
 public class ClientBuilder extends BaseBuilder<SshClient, ClientBuilder> {
+    /**
+     * Preferred {@link BuiltinSignatures} according to
+     * <A HREF="https://www.freebsd.org/cgi/man.cgi?query=ssh_config&sektion=5">sshd_config(5)</A>
+     * {@code HostKeyAlgorithms} recommendation
+     */
+    public static final List<BuiltinSignatures> DEFAULT_SIGNATURE_PREFERENCE =
+        /*
+         * According to https://tools.ietf.org/html/rfc8332#section-3.3:
+         *
+         *      Implementation experience has shown that there are servers that apply
+         *      authentication penalties to clients attempting public key algorithms
+         *      that the SSH server does not support.
+         *
+         *      When authenticating with an RSA key against a server that does not
+         *      implement the "server-sig-algs" extension, clients MAY default to an
+         *      "ssh-rsa" signature to avoid authentication penalties.  When the new
+         *      rsa-sha2-* algorithms have been sufficiently widely adopted to
+         *      warrant disabling "ssh-rsa", clients MAY default to one of the new
+         *      algorithms.
+         *
+         * Therefore we do not include by default the "rsa-sha-*" signatures.
+         */
+        Collections.unmodifiableList(
+            Arrays.asList(
+                BuiltinSignatures.nistp256,
+                BuiltinSignatures.nistp384,
+                BuiltinSignatures.nistp521,
+                BuiltinSignatures.ed25519,
+                BuiltinSignatures.rsa,
+                BuiltinSignatures.dsa
+            ));
 
     public static final Function<DHFactory, NamedFactory<KeyExchange>> DH2KEX = factory ->
             factory == null
@@ -57,12 +89,14 @@ public class ClientBuilder extends BaseBuilder<SshClient, ClientBuilder> {
 
     // Compression is not enabled by default for the client
     public static final List<CompressionFactory> DEFAULT_COMPRESSION_FACTORIES =
-            Collections.unmodifiableList(Collections.singletonList(BuiltinCompressions.none));
+        Collections.unmodifiableList(Collections.singletonList(BuiltinCompressions.none));
 
-    public static final List<NamedFactory<Channel>> DEFAULT_CHANNEL_FACTORIES =
-            Collections.unmodifiableList(Collections.singletonList(ForwardedTcpipFactory.INSTANCE));
+    public static final List<ChannelFactory> DEFAULT_CHANNEL_FACTORIES =
+            Collections.unmodifiableList(Collections.emptyList());
+        //Collections.unmodifiableList(Collections.singletonList(ForwardedTcpipFactory.INSTANCE));
+
     public static final List<RequestHandler<ConnectionService>> DEFAULT_GLOBAL_REQUEST_HANDLERS =
-            Collections.unmodifiableList(Collections.singletonList(OpenSshHostKeysHandler.INSTANCE));
+        Collections.unmodifiableList(Collections.singletonList(OpenSshHostKeysHandler.INSTANCE));
 
     public static final ServerKeyVerifier DEFAULT_SERVER_KEY_VERIFIER = AcceptAllServerKeyVerifier.INSTANCE;
     public static final HostConfigEntryResolver DEFAULT_HOST_CONFIG_ENTRY_RESOLVER = DefaultConfigFileHostEntryResolver.INSTANCE;
@@ -101,6 +135,10 @@ public class ClientBuilder extends BaseBuilder<SshClient, ClientBuilder> {
     @Override
     protected ClientBuilder fillWithDefaultValues() {
         super.fillWithDefaultValues();
+
+        if (signatureFactories == null) {
+            signatureFactories = NamedFactory.setUpBuiltinFactories(false, DEFAULT_SIGNATURE_PREFERENCE);
+        }
 
         if (compressionFactories == null) {
             compressionFactories = NamedFactory.setUpBuiltinFactories(false, DEFAULT_COMPRESSION_FACTORIES);
@@ -160,7 +198,7 @@ public class ClientBuilder extends BaseBuilder<SshClient, ClientBuilder> {
      * instances of the {@link KeyExchange}s according to the preference
      * order defined by {@link #DEFAULT_KEX_PREFERENCE}.
      * <B>Note:</B> the list may be filtered to exclude unsupported JCE
-     * key exchanges according to the {@code ignoreUnsupported} parameter
+     * key exchanges according to the ignoreUnsupported parameter
      * @see org.apache.sshd.common.kex.BuiltinDHFactories#isSupported()
      */
     public static List<NamedFactory<KeyExchange>> setUpDefaultKeyExchanges(boolean ignoreUnsupported) {

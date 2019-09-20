@@ -19,15 +19,15 @@
 
 package org.apache.sshd.fs;
 
-import org.apache.sshd.common.subsystem.sftp.SftpConstants;
-import org.apache.sshd.common.util.GenericUtils;
-
 import java.io.IOException;
 import java.nio.file.FileStore;
 import java.nio.file.FileSystem;
 import java.nio.file.attribute.FileAttributeView;
 import java.nio.file.attribute.FileStoreAttributeView;
 import java.util.Collection;
+
+import org.apache.sshd.common.subsystem.sftp.SftpConstants;
+import org.apache.sshd.common.util.GenericUtils;
 
 /**
  * @author <a href="mailto:dev@mina.apache.org">Apache MINA SSHD Project</a>

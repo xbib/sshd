@@ -41,7 +41,7 @@ public enum BuiltinDigests implements DigestFactory {
     sha512(Constants.SHA512, "SHA-512", 64);
 
     public static final Set<BuiltinDigests> VALUES =
-            Collections.unmodifiableSet(EnumSet.allOf(BuiltinDigests.class));
+        Collections.unmodifiableSet(EnumSet.allOf(BuiltinDigests.class));
 
     private final String algorithm;
     private final int blockSize;
@@ -158,5 +158,9 @@ public enum BuiltinDigests implements DigestFactory {
         public static final String SHA256 = "sha256";
         public static final String SHA384 = "sha384";
         public static final String SHA512 = "sha512";
+
+        private Constants() {
+            throw new UnsupportedOperationException("No instance allowed");
+        }
     }
 }

@@ -19,9 +19,11 @@
 
 package org.apache.sshd.common.util.logging;
 
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import java.util.concurrent.atomic.AtomicReference;
+
 import org.apache.sshd.common.util.GenericUtils;
+import org.apache.logging.log4j.Logger;
+import org.apache.logging.log4j.LogManager;
 
 /**
  * Serves as a common base class for the vast majority of classes that require
@@ -32,6 +34,7 @@ import org.apache.sshd.common.util.GenericUtils;
  */
 public abstract class AbstractLoggingBean {
     protected final Logger log;
+    private final AtomicReference<SimplifiedLog> simplifiedLog = new AtomicReference<>();
 
     /**
      * Default constructor - creates a logger using the full class name
@@ -53,5 +56,17 @@ public abstract class AbstractLoggingBean {
             name += "[" + discriminator + "]";
         }
         log = LogManager.getLogger(name);
+    }
+
+    protected SimplifiedLog getSimplifiedLogger() {
+        SimplifiedLog logger;
+        synchronized (simplifiedLog) {
+            logger = simplifiedLog.get();
+            if (logger == null) {
+                logger = LoggingUtils.wrap(log);
+            }
+        }
+
+        return logger;
     }
 }

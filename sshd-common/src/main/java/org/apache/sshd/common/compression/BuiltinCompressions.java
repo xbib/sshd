@@ -26,6 +26,7 @@ import java.util.Collections;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
+import java.util.NavigableSet;
 import java.util.Objects;
 import java.util.Set;
 import java.util.SortedSet;
@@ -70,10 +71,10 @@ public enum BuiltinCompressions implements CompressionFactory {
     };
 
     public static final Set<BuiltinCompressions> VALUES =
-            Collections.unmodifiableSet(EnumSet.allOf(BuiltinCompressions.class));
+        Collections.unmodifiableSet(EnumSet.allOf(BuiltinCompressions.class));
 
     private static final Map<String, CompressionFactory> EXTENSIONS =
-            new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+        new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
 
     private final String name;
 
@@ -112,8 +113,8 @@ public enum BuiltinCompressions implements CompressionFactory {
      *
      * @param extension The factory to register
      * @throws IllegalArgumentException if factory instance is {@code null},
-     *                                  or overrides a built-in one or overrides another registered factory
-     *                                  with the same name (case <U>insensitive</U>).
+     * or overrides a built-in one or overrides another registered factory
+     * with the same name (case <U>insensitive</U>).
      */
     public static void registerExtension(CompressionFactory extension) {
         String name = Objects.requireNonNull(extension, "No extension provided").getName();
@@ -129,7 +130,7 @@ public enum BuiltinCompressions implements CompressionFactory {
      * @return A {@link SortedSet} of the currently registered extensions, sorted
      * according to the factory name (case <U>insensitive</U>)
      */
-    public static SortedSet<CompressionFactory> getRegisteredExtensions() {
+    public static NavigableSet<CompressionFactory> getRegisteredExtensions() {
         synchronized (EXTENSIONS) {
             return GenericUtils.asSortedSet(NamedResource.BY_NAME_COMPARATOR, EXTENSIONS.values());
         }
@@ -226,9 +227,13 @@ public enum BuiltinCompressions implements CompressionFactory {
         }
     }
 
-    public static class Constants {
+    public static final class Constants {
         public static final String NONE = "none";
         public static final String ZLIB = "zlib";
         public static final String DELAYED_ZLIB = "zlib@openssh.com";
+
+        private Constants() {
+            throw new UnsupportedOperationException("No instance allowed");
+        }
     }
 }

@@ -30,7 +30,7 @@ import org.apache.sshd.common.util.net.SshdSocketAddress;
  */
 public interface ForwardingFilter
         extends PortForwardingManager,
-                PortForwardingEventListenerManager,
+        PortForwardingEventListenerManager,
                 PortForwardingEventListenerManagerHolder,
                 Closeable {
     /**

@@ -27,15 +27,17 @@ import java.util.Collections;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
+import java.util.NavigableSet;
 import java.util.Objects;
 import java.util.Set;
-import java.util.SortedSet;
 import java.util.TreeMap;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.apache.sshd.common.NamedFactory;
 import org.apache.sshd.common.NamedResource;
 import org.apache.sshd.common.cipher.ECCurves;
 import org.apache.sshd.common.config.NamedFactoriesListParseResult;
+import org.apache.sshd.common.config.keys.KeyUtils;
 import org.apache.sshd.common.keyprovider.KeyPairProvider;
 import org.apache.sshd.common.util.GenericUtils;
 import org.apache.sshd.common.util.ValidateUtils;
@@ -56,7 +58,39 @@ public enum BuiltinSignatures implements SignatureFactory {
     rsa(KeyPairProvider.SSH_RSA) {
         @Override
         public Signature create() {
-            return new SignatureRSA();
+            return new SignatureRSASHA1();
+        }
+    },
+    rsaSHA256(KeyUtils.RSA_SHA256_KEY_TYPE_ALIAS) {
+        @Override
+        public Signature create() {
+            return new SignatureRSASHA256();
+        }
+    },
+    rsaSHA512(KeyUtils.RSA_SHA512_KEY_TYPE_ALIAS) {
+        private final AtomicReference<Boolean> supportHolder = new AtomicReference<>();
+
+        @Override
+        public Signature create() {
+            return new SignatureRSASHA512();
+        }
+
+        @Override
+        public boolean isSupported() {
+            Boolean supported = supportHolder.get();
+            if (supported == null) {
+                try {
+                    java.security.Signature sig =
+                        SecurityUtils.getSignature(SignatureRSASHA512.ALGORITHM);
+                    supported = sig != null;
+                } catch (Exception e) {
+                    supported = Boolean.FALSE;
+                }
+
+                supportHolder.set(supported);
+            }
+
+            return supported;
         }
     },
     nistp256(KeyPairProvider.ECDSA_SHA2_NISTP256) {
@@ -105,10 +139,10 @@ public enum BuiltinSignatures implements SignatureFactory {
     };
 
     public static final Set<BuiltinSignatures> VALUES =
-            Collections.unmodifiableSet(EnumSet.allOf(BuiltinSignatures.class));
+        Collections.unmodifiableSet(EnumSet.allOf(BuiltinSignatures.class));
 
     private static final Map<String, SignatureFactory> EXTENSIONS =
-            new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+        new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
 
     private final String factoryName;
 
@@ -148,8 +182,8 @@ public enum BuiltinSignatures implements SignatureFactory {
      *
      * @param extension The factory to register
      * @throws IllegalArgumentException if factory instance is {@code null},
-     *                                  or overrides a built-in one or overrides another registered factory
-     *                                  with the same name (case <U>insensitive</U>).
+     * or overrides a built-in one or overrides another registered factory
+     * with the same name (case <U>insensitive</U>).
      */
     public static void registerExtension(SignatureFactory extension) {
         String name = Objects.requireNonNull(extension, "No extension provided").getName();
@@ -162,10 +196,10 @@ public enum BuiltinSignatures implements SignatureFactory {
     }
 
     /**
-     * @return A {@link SortedSet} of the currently registered extensions, sorted
+     * @return A {@link NavigableSet} of the currently registered extensions, sorted
      * according to the factory name (case <U>insensitive</U>)
      */
-    public static SortedSet<SignatureFactory> getRegisteredExtensions() {
+    public static NavigableSet<SignatureFactory> getRegisteredExtensions() {
         synchronized (EXTENSIONS) {
             return GenericUtils.asSortedSet(NamedResource.BY_NAME_COMPARATOR, EXTENSIONS.values());
         }

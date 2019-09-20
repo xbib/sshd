@@ -18,13 +18,13 @@
  */
 package org.apache.sshd.fs;
 
-import org.apache.sshd.common.file.util.BasePath;
-
 import java.io.IOException;
 import java.nio.file.FileSystem;
 import java.nio.file.LinkOption;
 import java.nio.file.spi.FileSystemProvider;
 import java.util.List;
+
+import org.apache.sshd.common.file.util.BasePath;
 
 public class SftpPath extends BasePath<SftpPath, SftpFileSystem> {
     public SftpPath(SftpFileSystem fileSystem, String root, List<String> names) {

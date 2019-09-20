@@ -22,8 +22,6 @@ import java.io.IOException;
 import java.util.Collection;
 import java.util.Objects;
 
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
 import org.apache.sshd.client.subsystem.sftp.SftpClient.CloseableHandle;
 import org.apache.sshd.client.subsystem.sftp.SftpClient.OpenMode;
 import org.apache.sshd.common.util.io.OutputStreamWithChannel;
@@ -34,9 +32,6 @@ import org.apache.sshd.common.util.io.OutputStreamWithChannel;
  * @author <a href="mailto:dev@mina.apache.org">Apache MINA SSHD Project</a>
  */
 public class SftpOutputStreamWithChannel extends OutputStreamWithChannel {
-
-    private static final Logger logger = LogManager.getLogger(SftpOutputStreamWithChannel.class);
-
     private final SftpClient client;
     private final String path;
     private final byte[] bb =  new byte[1];
@@ -83,8 +78,6 @@ public class SftpOutputStreamWithChannel extends OutputStreamWithChannel {
 
     @Override
     public void write(byte[] b, int off, int len) throws IOException {
-        logger.debug("write: off = " + off + " len = " + len);
-
         if (!isOpen()) {
             throw new IOException("write(" + getPath() + ")[len=" + len + "] stream is closed");
         }
@@ -106,7 +99,6 @@ public class SftpOutputStreamWithChannel extends OutputStreamWithChannel {
         if (!isOpen()) {
             throw new IOException("flush(" + getPath() + ") stream is closed");
         }
-        logger.debug("flush: len = " +  index);
 
         client.write(handle, offset, buffer, 0, index);
         offset += index;

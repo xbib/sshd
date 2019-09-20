@@ -37,9 +37,9 @@ public abstract class AbstractCloseable extends IoBaseCloseable {
     }
 
     /**
-     * Lock object for this session state
+     * Lock object for {@code Future}-s based on this closeable instance
      */
-    protected final Object lock = new Object();
+    protected final Object futureLock = new Object();
 
     /**
      * State of this object
@@ -57,7 +57,11 @@ public abstract class AbstractCloseable extends IoBaseCloseable {
 
     protected AbstractCloseable(String discriminator) {
         super(discriminator);
-        closeFuture = new DefaultCloseFuture(discriminator, lock);
+        closeFuture = new DefaultCloseFuture(discriminator, futureLock);
+    }
+
+    public Object getFutureLock() {
+        return futureLock;
     }
 
     @Override
@@ -71,26 +75,27 @@ public abstract class AbstractCloseable extends IoBaseCloseable {
     }
 
     @Override
-    public CloseFuture close(boolean immediately) {
+    public final CloseFuture close(boolean immediately) {
+        boolean debugEnabled = log.isDebugEnabled();
         if (immediately) {
             if (state.compareAndSet(State.Opened, State.Immediate)
                     || state.compareAndSet(State.Graceful, State.Immediate)) {
-                if (log.isDebugEnabled()) {
+                if (debugEnabled) {
                     log.debug("close({}) Closing immediately", this);
                 }
                 preClose();
                 doCloseImmediately();
-                if (log.isDebugEnabled()) {
+                if (debugEnabled) {
                     log.debug("close({})[Immediately] closed", this);
                 }
             } else {
-                if (log.isDebugEnabled()) {
+                if (debugEnabled) {
                     log.debug("close({})[Immediately] state already {}", this, state.get());
                 }
             }
         } else {
             if (state.compareAndSet(State.Opened, State.Graceful)) {
-                if (log.isDebugEnabled()) {
+                if (debugEnabled) {
                     log.debug("close({}) Closing gracefully", this);
                 }
                 preClose();
@@ -99,7 +104,7 @@ public abstract class AbstractCloseable extends IoBaseCloseable {
                     grace.addListener(future -> {
                         if (state.compareAndSet(State.Graceful, State.Immediate)) {
                             doCloseImmediately();
-                            if (log.isDebugEnabled()) {
+                            if (debugEnabled) {
                                 log.debug("close({}][Graceful] - operationComplete() closed", AbstractCloseable.this);
                             }
                         }
@@ -107,13 +112,13 @@ public abstract class AbstractCloseable extends IoBaseCloseable {
                 } else {
                     if (state.compareAndSet(State.Graceful, State.Immediate)) {
                         doCloseImmediately();
-                        if (log.isDebugEnabled()) {
+                        if (debugEnabled) {
                             log.debug("close({})[Graceful] closed", this);
                         }
                     }
                 }
             } else {
-                if (log.isDebugEnabled()) {
+                if (debugEnabled) {
                     log.debug("close({})[Graceful] state already {}", this, state.get());
                 }
             }
@@ -122,12 +127,12 @@ public abstract class AbstractCloseable extends IoBaseCloseable {
     }
 
     @Override
-    public boolean isClosed() {
+    public final boolean isClosed() {
         return state.get() == State.Closed;
     }
 
     @Override
-    public boolean isClosing() {
+    public final boolean isClosing() {
         return state.get() != State.Opened;
     }
 
@@ -156,6 +161,6 @@ public abstract class AbstractCloseable extends IoBaseCloseable {
     }
 
     protected Builder builder() {
-        return new Builder(lock);
+        return new Builder(futureLock);
     }
 }

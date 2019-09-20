@@ -18,6 +18,7 @@
  */
 package org.apache.sshd.common;
 
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.Map;
@@ -32,6 +33,7 @@ import org.apache.sshd.common.util.logging.LoggingUtils;
  * @author <a href="mailto:dev@mina.apache.org">Apache MINA SSHD Project</a>
  */
 public final class SshConstants {
+    public static final int DEFAULT_PORT = 22;
 
     //
     // SSH message identifiers
@@ -43,6 +45,7 @@ public final class SshConstants {
     public static final byte SSH_MSG_DEBUG = 4;
     public static final byte SSH_MSG_SERVICE_REQUEST = 5;
     public static final byte SSH_MSG_SERVICE_ACCEPT = 6;
+
     public static final byte SSH_MSG_KEXINIT = 20;
     public static final int MSG_KEX_COOKIE_SIZE = 16;
     public static final byte SSH_MSG_NEWKEYS = 21;
@@ -120,16 +123,29 @@ public final class SshConstants {
     // Some more constants
     public static final int SSH_EXTENDED_DATA_STDERR = 1;   // see RFC4254 section 5.2
     public static final int SSH_PACKET_HEADER_LEN = 5;  // 32-bit length + 8-bit pad length
+    /*
+     * See https://tools.ietf.org/html/rfc4253#section-6.1:
+     *
+     *      All implementations MUST be able to process packets with an
+     *      uncompressed payload length of 32768 bytes or less and a total packet
+     *      size of 35000 bytes or less
+     */
+    public static final int SSH_REQUIRED_PAYLOAD_PACKET_LENGTH_SUPPORT = 32768;
+    public static final int SSH_REQUIRED_TOTAL_PACKET_LENGTH_SUPPORT = 35000;
 
     private SshConstants() {
         throw new UnsupportedOperationException("No instance allowed");
     }
 
-    private static class LazyAmbiguousOpcodesHolder {
+    private static final class LazyAmbiguousOpcodesHolder {
         private static final Set<Integer> AMBIGUOUS_OPCODES =
             Collections.unmodifiableSet(
                 new HashSet<>(
-                        LoggingUtils.getAmbiguousMenmonics(SshConstants.class, "SSH_MSG_").values()));
+                    LoggingUtils.getAmbiguousMenmonics(SshConstants.class, "SSH_MSG_").values()));
+
+        private LazyAmbiguousOpcodesHolder() {
+            throw new UnsupportedOperationException("No instance allowed");
+        }
     }
 
     /**
@@ -138,7 +154,8 @@ public final class SshConstants {
      * @see #getAmbiguousOpcodes()
      */
     public static boolean isAmbiguousOpcode(int cmd) {
-        return getAmbiguousOpcodes().contains(cmd);
+        Collection<Integer> ambiguousOpcodes = getAmbiguousOpcodes();
+        return ambiguousOpcodes.contains(cmd);
     }
 
     /**
@@ -149,20 +166,24 @@ public final class SshConstants {
         return LazyAmbiguousOpcodesHolder.AMBIGUOUS_OPCODES;
     }
 
-    private static class LazyMessagesMapHolder {
+    private static final class LazyMessagesMapHolder {
         private static final Map<Integer, String> MESSAGES_MAP =
-                LoggingUtils.generateMnemonicMap(SshConstants.class, f -> {
-                    String name = f.getName();
-                    if (!name.startsWith("SSH_MSG_")) {
-                        return false;
-                    }
+            LoggingUtils.generateMnemonicMap(SshConstants.class, f -> {
+                String name = f.getName();
+                if (!name.startsWith("SSH_MSG_")) {
+                    return false;
+                }
 
-                    try {
-                        return !isAmbiguousOpcode(f.getByte(null));
-                    } catch (Exception e) {
-                        return false;
-                    }
-                });
+                try {
+                    return !isAmbiguousOpcode(f.getByte(null));
+                } catch (Exception e) {
+                    return false;
+                }
+            });
+
+        private LazyMessagesMapHolder() {
+            throw new UnsupportedOperationException("No instance allowed");
+        }
     }
 
     /**
@@ -182,8 +203,13 @@ public final class SshConstants {
         }
     }
 
-    private static class LazyReasonsMapHolder {
-        private static final Map<Integer, String> REASONS_MAP = LoggingUtils.generateMnemonicMap(SshConstants.class, "SSH2_DISCONNECT_");
+    private static final class LazyReasonsMapHolder {
+        private static final Map<Integer, String> REASONS_MAP =
+            LoggingUtils.generateMnemonicMap(SshConstants.class, "SSH2_DISCONNECT_");
+
+        private LazyReasonsMapHolder() {
+            throw new UnsupportedOperationException("No instance allowed");
+        }
     }
 
     /**
@@ -203,8 +229,13 @@ public final class SshConstants {
         }
     }
 
-    private static class LazyOpenCodesMapHolder {
-        private static final Map<Integer, String> OPEN_CODES_MAP = LoggingUtils.generateMnemonicMap(SshConstants.class, "SSH_OPEN_");
+    private static final class LazyOpenCodesMapHolder {
+        private static final Map<Integer, String> OPEN_CODES_MAP =
+            LoggingUtils.generateMnemonicMap(SshConstants.class, "SSH_OPEN_");
+
+        private LazyOpenCodesMapHolder() {
+            throw new UnsupportedOperationException("No instance allowed");
+        }
     }
 
     /**

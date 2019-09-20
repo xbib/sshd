@@ -25,28 +25,33 @@ import java.net.SocketAddress;
 import java.net.SocketTimeoutException;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
+import java.rmi.RemoteException;
+import java.rmi.ServerException;
+import java.security.KeyPair;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.EnumSet;
+import java.util.Iterator;
 import java.util.Map;
 import java.util.Set;
 
 import org.apache.sshd.client.ClientAuthenticationManager;
 import org.apache.sshd.client.ClientFactoryManager;
+import org.apache.sshd.client.auth.password.PasswordIdentityProvider;
 import org.apache.sshd.client.channel.ChannelDirectTcpip;
 import org.apache.sshd.client.channel.ChannelExec;
 import org.apache.sshd.client.channel.ChannelShell;
 import org.apache.sshd.client.channel.ChannelSubsystem;
-import org.apache.sshd.common.channel.ClientChannel;
-import org.apache.sshd.common.channel.ClientChannelEvent;
+import org.apache.sshd.client.channel.ClientChannel;
+import org.apache.sshd.client.channel.ClientChannelEvent;
 import org.apache.sshd.client.future.AuthFuture;
-import org.apache.sshd.client.scp.ScpClientCreator;
 import org.apache.sshd.client.session.forward.DynamicPortForwardingTracker;
 import org.apache.sshd.client.session.forward.ExplicitPortForwardingTracker;
-import org.apache.sshd.client.subsystem.sftp.SftpClientCreator;
-import org.apache.sshd.client.subsystem.sftp.SftpClientFactoryManager;
+import org.apache.sshd.common.AttributeRepository;
+import org.apache.sshd.common.channel.PtyChannelConfigurationHolder;
 import org.apache.sshd.common.forward.PortForwardingManager;
 import org.apache.sshd.common.future.KeyExchangeFuture;
+import org.apache.sshd.common.keyprovider.KeyIdentityProvider;
 import org.apache.sshd.common.session.Session;
 import org.apache.sshd.common.util.io.NoCloseOutputStream;
 import org.apache.sshd.common.util.io.NullOutputStream;
@@ -58,14 +63,14 @@ import org.apache.sshd.common.util.net.SshdSocketAddress;
  * <P>
  * A client session is established using the {@link org.apache.sshd.client.SshClient}.
  * Once the session has been created, the user has to authenticate
- * using either {@link #addPasswordIdentity(char[])} or
- * {@link #addPublicKeyIdentity(java.security.KeyPair)} followed by
+ * using either {@link #addPasswordIdentity(String)} or
+ * {@link #addPublicKeyIdentity(KeyPair)} followed by
  * a call to {@link #auth()}.
  * </P>
  *
  * <P>
  * From this session, channels can be created using the
- * {@link #createChannel(String)} method.  Multiple channels can
+ * {@link #createChannel(String)} method. Multiple channels can
  * be created on a given session concurrently.
  * </P>
  *
@@ -81,9 +86,8 @@ import org.apache.sshd.common.util.net.SshdSocketAddress;
  * @author <a href="mailto:dev@mina.apache.org">Apache MINA SSHD Project</a>
  */
 public interface ClientSession
-            extends Session, ScpClientCreator, SftpClientCreator, SftpClientFactoryManager,
-            ClientProxyConnectorHolder, ClientAuthenticationManager,
-            PortForwardingManager {
+            extends Session, ClientProxyConnectorHolder,
+            ClientAuthenticationManager, PortForwardingManager {
     enum ClientSessionEvent {
         TIMEOUT,
         CLOSED,
@@ -92,7 +96,7 @@ public interface ClientSession
     }
 
     Set<ClientChannelEvent> REMOTE_COMMAND_WAIT_EVENTS =
-            Collections.unmodifiableSet(EnumSet.of(ClientChannelEvent.CLOSED));
+        Collections.unmodifiableSet(EnumSet.of(ClientChannelEvent.CLOSED));
 
     /**
      * Returns the original address (after having been translated through host
@@ -106,15 +110,21 @@ public interface ClientSession
     SocketAddress getConnectAddress();
 
     /**
+     * @return The &quot;context&quot; data provided when
+     * session connection was established - {@code null} if none.
+     */
+    AttributeRepository getConnectionContext();
+
+    /**
      * Starts the authentication process.
      * User identities will be tried until the server successfully authenticate the user.
      * User identities must be provided before calling this method using
-     * {@link #addPasswordIdentity(char[])} or {@link #addPublicKeyIdentity(java.security.KeyPair)}.
+     * {@link #addPasswordIdentity(String)} or {@link #addPublicKeyIdentity(KeyPair)}.
      *
      * @return the authentication future
      * @throws IOException if failed to generate the future
-     * @see #addPasswordIdentity(char[])
-     * @see #addPublicKeyIdentity(java.security.KeyPair)
+     * @see #addPasswordIdentity(String)
+     * @see #addPublicKeyIdentity(KeyPair)
      */
     AuthFuture auth() throws IOException;
 
@@ -139,21 +149,54 @@ public interface ClientSession
     ClientChannel createChannel(String type, String subType) throws IOException;
 
     /**
-     * Create a channel to start a shell.
+     * Create a channel to start a shell using default PTY settings and environment.
      *
      * @return The created {@link ChannelShell}
      * @throws IOException If failed to create the requested channel
      */
-    ChannelShell createShellChannel() throws IOException;
+    default ChannelShell createShellChannel() throws IOException {
+        return createShellChannel(null, Collections.emptyMap());
+    }
 
     /**
-     * Create a channel to execute a command.
+     * Create a channel to start a shell using specific PTY settings and/or environment.
+     *
+     * @param ptyConfig The PTY configuration to use - if {@code null} then
+     * internal defaults are used
+     * @param env Extra environment configuration to be transmitted to the server - ignored
+     * if {@code null}/empty.
+     * @return The created {@link ChannelShell}
+     * @throws IOException If failed to create the requested channel
+     */
+    ChannelShell createShellChannel(
+            PtyChannelConfigurationHolder ptyConfig, Map<String, ?> env)
+            throws IOException;
+
+    /**
+     * Create a channel to execute a command using default PTY settings and environment.
      *
      * @param command The command to execute
      * @return The created {@link ChannelExec}
      * @throws IOException If failed to create the requested channel
      */
-    ChannelExec createExecChannel(String command) throws IOException;
+    default ChannelExec createExecChannel(String command) throws IOException {
+        return createExecChannel(command, null, Collections.emptyMap());
+    }
+
+    /**
+     * Create a channel to execute a command using specific PTY settings and/or environment.
+     *
+     * @param command The command to execute
+     * @param ptyConfig The PTY configuration to use - if {@code null} then
+     * internal defaults are used
+     * @param env Extra environment configuration to be transmitted to the server - ignored
+     * if {@code null}/empty.
+     * @return The created {@link ChannelExec}
+     * @throws IOException If failed to create the requested channel
+     */
+    ChannelExec createExecChannel(
+            String command, PtyChannelConfigurationHolder ptyConfig, Map<String, ?> env)
+            throws IOException;
 
     /**
      * Execute a command that requires no input and returns its output
@@ -162,8 +205,8 @@ public interface ClientSession
      * @return The command's standard output result (assumed to be in US-ASCII)
      * @throws IOException If failed to execute the command - including
      * if <U>anything</U> was written to the standard error or a non-zero exit
-     * status was received. If this happens, then a {@link RuntimeException} is
-     * thrown with a cause of {@link RuntimeException} containing the remote
+     * status was received. If this happens, then a {@link RemoteException} is
+     * thrown with a cause of {@link ServerException} containing the remote
      * captured standard error - including CR/LF(s)
      * @see #executeRemoteCommand(String, OutputStream, Charset)
      */
@@ -173,7 +216,7 @@ public interface ClientSession
             if (stderr.size() > 0) {
                 byte[] error = stderr.toByteArray();
                 String errorMessage = new String(error, StandardCharsets.US_ASCII);
-                throw new RuntimeException("Error reported from remote command='" + command, new RuntimeException(errorMessage));
+                throw new RemoteException("Error reported from remote command='" + command, new ServerException(errorMessage));
             }
 
             return response;
@@ -194,8 +237,8 @@ public interface ClientSession
      * @throws IOException If failed to manage the command channel - <B>Note:</B>
      * the code does not check if anything was output to the standard error stream,
      * but does check the reported exit status (if any) for non-zero value. If
-     * non-zero exit status received then a {@link RuntimeException} is thrown with'
-     * a {@link RuntimeException} cause containing the exits value
+     * non-zero exit status received then a {@link RemoteException} is thrown with'
+     * a {@link ServerException} cause containing the exits value
      * @see #executeRemoteCommand(String, OutputStream, OutputStream, Charset)
      */
     default String executeRemoteCommand(String command, OutputStream stderr, Charset charset) throws IOException {
@@ -225,8 +268,11 @@ public interface ClientSession
      * @param charset The command {@link Charset} for output/error - if
      * {@code null} then US_ASCII is assumed
      * @throws IOException If failed to execute the command or got a non-zero exit status
+     * @see ClientChannel#validateCommandExitStatusCode(String, Integer) validateCommandExitStatusCode
      */
-    default void executeRemoteCommand(String command, OutputStream stdout, OutputStream stderr, Charset charset) throws IOException {
+    default void executeRemoteCommand(
+            String command, OutputStream stdout, OutputStream stderr, Charset charset)
+                throws IOException {
         if (charset == null) {
             charset = StandardCharsets.US_ASCII;
         }
@@ -245,7 +291,7 @@ public interface ClientSession
             }
 
             Integer exitStatus = channel.getExitStatus();
-            //ClientChannel.validateCommandExitStatusCode(command, exitStatus);
+            ClientChannel.validateCommandExitStatusCode(command, exitStatus);
         }
     }
 
@@ -266,7 +312,9 @@ public interface ClientSession
      * @return The created {@link ChannelDirectTcpip}
      * @throws IOException If failed to create the requested channel
      */
-    ChannelDirectTcpip createDirectTcpipChannel(SshdSocketAddress local, SshdSocketAddress remote) throws IOException;
+    ChannelDirectTcpip createDirectTcpipChannel(
+            SshdSocketAddress local, SshdSocketAddress remote)
+            throws IOException;
 
     /**
      * Starts a local port forwarding and returns a tracker that stops the
@@ -280,8 +328,11 @@ public interface ClientSession
      * @throws IOException If failed to set up the requested forwarding
      * @see #startLocalPortForwarding(SshdSocketAddress, SshdSocketAddress)
      */
-    default ExplicitPortForwardingTracker createLocalPortForwardingTracker(SshdSocketAddress local, SshdSocketAddress remote) throws IOException {
-        return new ExplicitPortForwardingTracker(this, true, local, remote, startLocalPortForwarding(local, remote));
+    default ExplicitPortForwardingTracker createLocalPortForwardingTracker(
+            SshdSocketAddress local, SshdSocketAddress remote)
+                throws IOException {
+        return new ExplicitPortForwardingTracker(
+            this, true, local, remote, startLocalPortForwarding(local, remote));
     }
 
     /**
@@ -296,8 +347,11 @@ public interface ClientSession
      * @throws IOException If failed to set up the requested forwarding
      * @see #startRemotePortForwarding(SshdSocketAddress, SshdSocketAddress)
      */
-    default ExplicitPortForwardingTracker createRemotePortForwardingTracker(SshdSocketAddress remote, SshdSocketAddress local) throws IOException {
-        return new ExplicitPortForwardingTracker(this, false, local, remote, startRemotePortForwarding(remote, local));
+    default ExplicitPortForwardingTracker createRemotePortForwardingTracker(
+            SshdSocketAddress remote, SshdSocketAddress local)
+                throws IOException {
+        return new ExplicitPortForwardingTracker(
+            this, false, local, remote, startRemotePortForwarding(remote, local));
     }
 
     /**
@@ -316,20 +370,28 @@ public interface ClientSession
     }
 
     /**
+     * @return A snapshot of the current session state
+     * @see #waitFor(Collection, long)
+     */
+    Set<ClientSessionEvent> getSessionState();
+
+    /**
      * Wait for any one of a specific state to be signaled.
      *
      * @param mask    The request {@link ClientSessionEvent}s mask
      * @param timeout Wait time in milliseconds - non-positive means forever
      * @return The actual state that was detected either due to the mask
-     * yielding one of the states or due to timeout (in which case the {@link ClientSessionEvent#TIMEOUT}
-     * value is set)
+     * yielding one of the states or due to timeout (in which case the
+     * {@link ClientSessionEvent#TIMEOUT} value is set)
      */
     Set<ClientSessionEvent> waitFor(Collection<ClientSessionEvent> mask, long timeout);
 
     /**
      * Access to the metadata.
      *
-     * @return The metadata {@link Map}
+     * @return The metadata {@link Map} - <B>Note:</B> access to the map
+     * is not {@code synchronized} in any way - up to the user to take care
+     * of mutual exclusion if necessary
      */
     Map<Object, Object> getMetadataMap();
 
@@ -354,4 +416,40 @@ public interface ClientSession
      * @throws IOException if a key exchange is already running
      */
     KeyExchangeFuture switchToNoneCipher() throws IOException;
+
+    /**
+     * Creates a &quot;unified&quot; {@link KeyIdentityProvider} of key pairs out of the registered
+     * {@link KeyPair} identities and the extra available ones as a single iterator
+     * of key pairs
+     *
+     *
+     * @param session The {@link ClientSession} - ignored if {@code null} (i.e., empty
+     * iterator returned)
+     * @return The wrapping KeyIdentityProvider
+     * @see ClientSession#getRegisteredIdentities()
+     * @see ClientSession#getKeyIdentityProvider()
+     */
+    static KeyIdentityProvider providerOf(ClientSession session) {
+        return (session == null)
+            ? KeyIdentityProvider.EMPTY_KEYS_PROVIDER
+            : KeyIdentityProvider.resolveKeyIdentityProvider(
+                session.getRegisteredIdentities(), session.getKeyIdentityProvider());
+    }
+
+    /**
+     * Creates a &quot;unified&quot; {@link Iterator} of passwords out of the registered
+     * passwords and the extra available ones as a single iterator of passwords
+     *
+     * @param session The {@link ClientSession} - ignored if {@code null} (i.e., empty
+     * iterator returned)
+     * @return The wrapping iterator
+     * @see ClientSession#getRegisteredIdentities()
+     * @see ClientSession#getPasswordIdentityProvider()
+     */
+    static Iterator<String> passwordIteratorOf(ClientSession session) {
+        return (session == null)
+            ? Collections.<String>emptyIterator()
+            : PasswordIdentityProvider.iteratorOf(
+                session.getRegisteredIdentities(), session.getPasswordIdentityProvider());
+    }
 }

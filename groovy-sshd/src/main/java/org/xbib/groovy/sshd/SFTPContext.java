@@ -13,12 +13,14 @@ import java.util.Map;
  */
 class SFTPContext {
 
+    private final SshClient sshClient;
+
     final SftpFileSystemProvider provider;
 
     final SftpFileSystem fileSystem;
 
     SFTPContext(URI uri, Map<String, ?> env) throws IOException {
-        SshClient sshClient = ClientBuilder.builder().build();
+        this.sshClient = ClientBuilder.builder().build();
         Object object = env.get("workers");
         if (object instanceof Integer) {
             sshClient.setNioWorkers((Integer) object);
@@ -28,11 +30,13 @@ class SFTPContext {
             // we do not require a vast pool of threads
             sshClient.setNioWorkers(1);
         }
+        sshClient.start();
         this.provider = new SftpFileSystemProvider(sshClient);
         this.fileSystem = provider.newFileSystem(uri, env);
     }
 
     void close() throws IOException {
+        sshClient.stop();
         fileSystem.close();
     }
 }

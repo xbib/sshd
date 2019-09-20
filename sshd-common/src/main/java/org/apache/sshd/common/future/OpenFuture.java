@@ -27,7 +27,7 @@ public interface OpenFuture extends SshFuture<OpenFuture>, VerifiableFuture<Open
     /**
      * Returns the cause of the connection failure.
      *
-     * @return <code>null</code> if the connect operation is not finished yet,
+     * @return {@code null} if the connect operation is not finished yet,
      * or if the connection attempt is successful (use {@link #isDone()} to
      * distinguish between the two).
      */
@@ -46,15 +46,15 @@ public interface OpenFuture extends SshFuture<OpenFuture>, VerifiableFuture<Open
 
     /**
      * Sets the newly connected session and notifies all threads waiting for
-     * this future.  This method is invoked by SSHD internally.  Please do not
+     * this future. This method is invoked by SSHD internally. Please do not
      * call this method directly.
      */
     void setOpened();
 
     /**
      * Sets the exception caught due to connection failure and notifies all
-     * threads waiting for this future.  This method is invoked by SSHD
-     * internally.  Please do not call this method directly.
+     * threads waiting for this future. This method is invoked by SSHD
+     * internally. Please do not call this method directly.
      *
      * @param exception The caught {@link Throwable}
      */
@@ -65,5 +65,4 @@ public interface OpenFuture extends SshFuture<OpenFuture>, VerifiableFuture<Open
      * this future.
      */
     void cancel();
-
 }

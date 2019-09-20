@@ -27,13 +27,12 @@ import java.util.List;
 
 import org.apache.sshd.client.auth.AuthenticationIdentitiesProvider;
 import org.apache.sshd.client.auth.BuiltinUserAuthFactories;
-import org.apache.sshd.client.auth.UserAuth;
+import org.apache.sshd.client.auth.UserAuthFactory;
 import org.apache.sshd.client.auth.keyboard.UserInteraction;
 import org.apache.sshd.client.auth.password.PasswordIdentityProvider;
 import org.apache.sshd.client.keyverifier.ServerKeyVerifier;
-import org.apache.sshd.common.NamedFactory;
 import org.apache.sshd.common.NamedResource;
-import org.apache.sshd.common.keyprovider.KeyPairProviderHolder;
+import org.apache.sshd.common.keyprovider.KeyIdentityProviderHolder;
 import org.apache.sshd.common.util.GenericUtils;
 import org.apache.sshd.common.util.ValidateUtils;
 
@@ -41,7 +40,7 @@ import org.apache.sshd.common.util.ValidateUtils;
  * Holds information required for the client to perform authentication with the server
  * @author <a href="mailto:dev@mina.apache.org">Apache MINA SSHD Project</a>
  */
-public interface ClientAuthenticationManager extends KeyPairProviderHolder {
+public interface ClientAuthenticationManager extends KeyIdentityProviderHolder {
 
     /**
      * Ordered comma separated list of authentications methods.
@@ -74,7 +73,8 @@ public interface ClientAuthenticationManager extends KeyPairProviderHolder {
      * candidates
      *
      * @return The {@link PasswordIdentityProvider} instance - ignored if {@code null}
-     * (i.e., no passwords available)
+     * (i.e., no passwords available).
+     * @see #addPasswordIdentity(String)
      */
     PasswordIdentityProvider getPasswordIdentityProvider();
 
@@ -85,7 +85,15 @@ public interface ClientAuthenticationManager extends KeyPairProviderHolder {
      * <B>Note:</B> this password is <U>in addition</U> to whatever passwords
      * are available via the {@link PasswordIdentityProvider} (if any)
      */
-    void addPasswordIdentity(char[] password);
+    void addPasswordIdentity(String password);
+
+    /**
+     * @param password The password to remove - ignored if {@code null}/empty
+     * @return The removed password - same one that was added via
+     * {@link #addPasswordIdentity(String)} - or {@code null} if no
+     * match found
+     */
+    String removePasswordIdentity(String password);
 
     /**
      * @param key The {@link KeyPair} to add - may not be {@code null}
@@ -121,10 +129,10 @@ public interface ClientAuthenticationManager extends KeyPairProviderHolder {
     void setUserInteraction(UserInteraction userInteraction);
 
     /**
-     * @return a {@link List} of {@link UserAuth} {@link NamedFactory}-ies - never
+     * @return a {@link List} of {@link UserAuthFactory}-ies - never
      * {@code null}/empty
      */
-    List<NamedFactory<UserAuth>> getUserAuthFactories();
+    List<UserAuthFactory> getUserAuthFactories();
 
     default String getUserAuthFactoriesNameList() {
         return NamedResource.getNames(getUserAuthFactories());
@@ -134,23 +142,26 @@ public interface ClientAuthenticationManager extends KeyPairProviderHolder {
         return NamedResource.getNameList(getUserAuthFactories());
     }
 
-    void setUserAuthFactories(List<NamedFactory<UserAuth>> userAuthFactories);
+    void setUserAuthFactories(List<UserAuthFactory> userAuthFactories);
 
     default void setUserAuthFactoriesNameList(String names) {
         setUserAuthFactoriesNames(GenericUtils.split(names, ','));
     }
 
     default void setUserAuthFactoriesNames(String... names) {
-        setUserAuthFactoriesNames(GenericUtils.isEmpty((Object[]) names) ? Collections.emptyList() : Arrays.asList(names));
+        setUserAuthFactoriesNames(
+            GenericUtils.isEmpty((Object[]) names) ? Collections.emptyList() : Arrays.asList(names));
     }
 
     default void setUserAuthFactoriesNames(Collection<String> names) {
-        BuiltinUserAuthFactories.ParseResult result = BuiltinUserAuthFactories.parseFactoriesList(names);
-        @SuppressWarnings({ "rawtypes", "unchecked" })
-        List<NamedFactory<UserAuth>> factories =
-                (List) ValidateUtils.checkNotNullAndNotEmpty(result.getParsedFactories(), "No supported cipher factories: %s", names);
+        BuiltinUserAuthFactories.ParseResult result =
+            BuiltinUserAuthFactories.parseFactoriesList(names);
+        List<UserAuthFactory> factories =
+            ValidateUtils.checkNotNullAndNotEmpty(
+                result.getParsedFactories(), "No supported cipher factories: %s", names);
         Collection<String> unsupported = result.getUnsupportedFactories();
-        ValidateUtils.checkTrue(GenericUtils.isEmpty(unsupported), "Unsupported cipher factories found: %s", unsupported);
+        ValidateUtils.checkTrue(
+            GenericUtils.isEmpty(unsupported), "Unsupported cipher factories found: %s", unsupported);
         setUserAuthFactories(factories);
     }
 }

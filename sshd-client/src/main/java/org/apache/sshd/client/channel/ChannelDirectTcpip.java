@@ -22,10 +22,7 @@ import java.io.IOException;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
-import org.apache.sshd.common.channel.AbstractClientChannel;
-import org.apache.sshd.common.future.DefaultOpenFuture;
+import org.apache.sshd.client.future.DefaultOpenFuture;
 import org.apache.sshd.common.future.OpenFuture;
 import org.apache.sshd.common.SshConstants;
 import org.apache.sshd.common.SshException;
@@ -47,8 +44,6 @@ import org.apache.sshd.common.util.net.SshdSocketAddress;
  */
 public class ChannelDirectTcpip extends AbstractClientChannel {
 
-    private static final Logger logger = LogManager.getLogger(ChannelDirectTcpip.class);
-
     private final SshdSocketAddress local;
     private final SshdSocketAddress remote;
     private ChannelPipedOutputStream pipe;
@@ -57,7 +52,8 @@ public class ChannelDirectTcpip extends AbstractClientChannel {
         super("direct-tcpip");
         if (local == null) {
             try {
-                local = new SshdSocketAddress(InetAddress.getLocalHost().getHostName(), 0);
+                InetAddress localHost = InetAddress.getLocalHost();
+                local = new SshdSocketAddress(localHost.getHostName(), 0);
             } catch (UnknownHostException e) {
                 throw new IllegalStateException("Unable to retrieve local host name");
             }
@@ -75,7 +71,7 @@ public class ChannelDirectTcpip extends AbstractClientChannel {
             throw new SshException("Session has been closed");
         }
 
-        openFuture = new DefaultOpenFuture(remote, lock);
+        openFuture = new DefaultOpenFuture(remote, futureLock);
         if (log.isDebugEnabled()) {
             log.debug("open({}) SSH_MSG_CHANNEL_OPEN", this);
         }
@@ -84,8 +80,9 @@ public class ChannelDirectTcpip extends AbstractClientChannel {
         String remoteName = remote.getHostName();
         String localName = local.getHostName();
         Window wLocal = getLocalWindow();
+        String type = getChannelType();
         Buffer buffer = session.createBuffer(SshConstants.SSH_MSG_CHANNEL_OPEN,
-                            type.length() + remoteName.length() + localName.length() + Long.SIZE);
+            type.length() + remoteName.length() + localName.length() + Long.SIZE);
         buffer.putString(type);
         buffer.putInt(getId());
         buffer.putInt(wLocal.getSize());
@@ -116,11 +113,18 @@ public class ChannelDirectTcpip extends AbstractClientChannel {
     @Override
     protected void doWriteData(byte[] data, int off, long len) throws IOException {
         ValidateUtils.checkTrue(len <= Integer.MAX_VALUE, "Data length exceeds int boundaries: %d", len);
-        logger.debug("doWriteData: off=" + off + " len = " + len);
         pipe.write(data, off, (int) len);
         pipe.flush();
 
         Window wLocal = getLocalWindow();
         wLocal.consumeAndCheck(len);
+    }
+
+    public SshdSocketAddress getLocalSocketAddress() {
+        return this.local;
+    }
+
+    public SshdSocketAddress getRemoteSocketAddress() {
+        return this.remote;
     }
 }

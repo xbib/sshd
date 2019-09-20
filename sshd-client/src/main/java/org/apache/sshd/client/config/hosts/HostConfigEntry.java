@@ -20,7 +20,6 @@ package org.apache.sshd.client.config.hosts;
 
 import java.io.BufferedReader;
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -43,15 +42,16 @@ import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.NavigableSet;
 import java.util.Objects;
-import java.util.Set;
 import java.util.TreeMap;
 
 import org.apache.sshd.common.auth.MutableUserHolder;
-import org.apache.sshd.common.config.SshConfigFileReader;
+import org.apache.sshd.common.config.ConfigFileReaderSupport;
 import org.apache.sshd.common.config.keys.IdentityUtils;
 import org.apache.sshd.common.config.keys.PublicKeyEntry;
 import org.apache.sshd.common.util.GenericUtils;
+import org.apache.sshd.common.util.MapEntryUtils.NavigableMapBuilder;
 import org.apache.sshd.common.util.OsUtils;
 import org.apache.sshd.common.util.ValidateUtils;
 import org.apache.sshd.common.util.io.IoUtils;
@@ -61,9 +61,10 @@ import org.apache.sshd.common.util.io.NoCloseReader;
 
 /**
  * Represents an entry in the client's configuration file as defined by
- * the <A HREF="http://www.gsp.com/cgi-bin/man.cgi?topic=ssh_config">configuration
- * file format</A>
+ * the <A HREF="https://linux.die.net/man/5/ssh_config">ssh_config</A>
+ * configuration file format
  * @author <a href="mailto:dev@mina.apache.org">Apache MINA SSHD Project</a>
+ * @see <A HREF="https://www.cyberciti.biz/faq/create-ssh-config-file-on-linux-unix/">OpenSSH Config File Examples</A>
  */
 public class HostConfigEntry extends HostPatternsHolder implements MutableUserHolder {
     /**
@@ -73,7 +74,7 @@ public class HostConfigEntry extends HostPatternsHolder implements MutableUserHo
 
     public static final String HOST_CONFIG_PROP = "Host";
     public static final String HOST_NAME_CONFIG_PROP = "HostName";
-    public static final String PORT_CONFIG_PROP = SshConfigFileReader.PORT_CONFIG_PROP;
+    public static final String PORT_CONFIG_PROP = ConfigFileReaderSupport.PORT_CONFIG_PROP;
     public static final String USER_CONFIG_PROP = "User";
     public static final String IDENTITY_FILE_CONFIG_PROP = "IdentityFile";
     /**
@@ -83,14 +84,14 @@ public class HostConfigEntry extends HostPatternsHolder implements MutableUserHo
     public static final boolean DEFAULT_EXCLUSIVE_IDENTITIES = false;
 
     /**
-     * A case <U>insensitive</U> {@link Set} of the properties that receive special handling
+     * A case <U>insensitive</U> {@link NavigableSet} of the properties that receive special handling
      */
-    public static final Set<String> EXPLICIT_PROPERTIES =
-            Collections.unmodifiableSet(
-                    GenericUtils.asSortedSet(String.CASE_INSENSITIVE_ORDER,
-                            HOST_CONFIG_PROP, HOST_NAME_CONFIG_PROP, PORT_CONFIG_PROP,
-                            USER_CONFIG_PROP, IDENTITY_FILE_CONFIG_PROP, EXCLUSIVE_IDENTITIES_CONFIG_PROP
-                        ));
+    public static final NavigableSet<String> EXPLICIT_PROPERTIES =
+        Collections.unmodifiableNavigableSet(
+            GenericUtils.asSortedSet(String.CASE_INSENSITIVE_ORDER,
+                HOST_CONFIG_PROP, HOST_NAME_CONFIG_PROP, PORT_CONFIG_PROP,
+                USER_CONFIG_PROP, IDENTITY_FILE_CONFIG_PROP, EXCLUSIVE_IDENTITIES_CONFIG_PROP
+            ));
 
     public static final String MULTI_VALUE_SEPARATORS = " ,";
 
@@ -105,7 +106,12 @@ public class HostConfigEntry extends HostPatternsHolder implements MutableUserHo
     public static final char REMOTE_PORT_MACRO = 'p';
 
     private static final class LazyDefaultConfigFileHolder {
-        private static final Path CONFIG_FILE = PublicKeyEntry.getDefaultKeysFolderPath().resolve(STD_CONFIG_FILENAME);
+        private static final Path CONFIG_FILE =
+            PublicKeyEntry.getDefaultKeysFolderPath().resolve(STD_CONFIG_FILENAME);
+
+        private LazyDefaultConfigFileHolder() {
+            throw new UnsupportedOperationException("No instance allowed");
+        }
     }
 
     private String host;
@@ -215,13 +221,6 @@ public class HostConfigEntry extends HostPatternsHolder implements MutableUserHo
     }
 
     /**
-     * @param file A {@link File} that contains an identity key - never {@code null}
-     */
-    public void addIdentity(File file) {
-        addIdentity(Objects.requireNonNull(file, "No file").toPath());
-    }
-
-    /**
      * @param path A {@link Path} to a file that contains an identity key
      * - never {@code null}
      */
@@ -285,7 +284,7 @@ public class HostConfigEntry extends HostPatternsHolder implements MutableUserHo
         String key = ValidateUtils.checkNotNullAndNotEmpty(name, "No property name");
         Map<String, String> props = getProperties();
         if (GenericUtils.isEmpty(props)) {
-            return null;
+            return defaultValue;
         }
 
         String value = props.get(key);
@@ -442,7 +441,7 @@ public class HostConfigEntry extends HostPatternsHolder implements MutableUserHo
      * @param ignoreAlreadyInitialized If {@code false} and one of the &quot;known&quot;
      * properties is encountered then throws an exception
      * @throws IllegalArgumentException If an existing value is overwritten and
-     * {@code ignoreAlreadyInitialized} is {@code false} (except for {@link #IDENTITY_FILE_CONFIG_PROP}
+     * ignoreAlreadyInitialized is {@code false} (except for {@link #IDENTITY_FILE_CONFIG_PROP}
      * which is <U>cumulative</U>
      * @see #HOST_NAME_CONFIG_PROP
      * @see #PORT_CONFIG_PROP
@@ -482,8 +481,8 @@ public class HostConfigEntry extends HostPatternsHolder implements MutableUserHo
             }
         } else if (EXCLUSIVE_IDENTITIES_CONFIG_PROP.equalsIgnoreCase(key)) {
             setIdentitiesOnly(
-                    SshConfigFileReader.parseBooleanValue(
-                            ValidateUtils.checkNotNullAndNotEmpty(joinedValue, "No identities option value")));
+                ConfigFileReaderSupport.parseBooleanValue(
+                    ValidateUtils.checkNotNullAndNotEmpty(joinedValue, "No identities option value")));
         }
     }
 
@@ -560,7 +559,7 @@ public class HostConfigEntry extends HostPatternsHolder implements MutableUserHo
         appendNonEmptyProperty(sb, USER_CONFIG_PROP, getUsername());
         appendNonEmptyValues(sb, IDENTITY_FILE_CONFIG_PROP, getIdentities());
         if (exclusiveIdentites != null) {
-            appendNonEmptyProperty(sb, EXCLUSIVE_IDENTITIES_CONFIG_PROP, SshConfigFileReader.yesNoValueOf(exclusiveIdentites));
+            appendNonEmptyProperty(sb, EXCLUSIVE_IDENTITIES_CONFIG_PROP, ConfigFileReaderSupport.yesNoValueOf(exclusiveIdentites));
         }
         appendNonEmptyProperties(sb, getProperties());
         return sb;
@@ -668,11 +667,11 @@ public class HostConfigEntry extends HostPatternsHolder implements MutableUserHo
      * @param entries The entries - ignored if {@code null}/empty
      * @return A {@link HostConfigEntryResolver} wrapper using the entries
      */
-    public static HostConfigEntryResolver toHostConfigEntryResolver(final Collection<? extends HostConfigEntry> entries) {
+    public static HostConfigEntryResolver toHostConfigEntryResolver(Collection<? extends HostConfigEntry> entries) {
         if (GenericUtils.isEmpty(entries)) {
             return HostConfigEntryResolver.EMPTY;
         } else {
-            return (host1, port1, username1) -> {
+            return (host1, port1, lclAddress, username1, ctx) -> {
                 List<HostConfigEntry> matches = findMatchingEntries(host1, entries);
                 int numMatches = GenericUtils.size(matches);
                 if (numMatches <= 0) {
@@ -702,7 +701,9 @@ public class HostConfigEntry extends HostPatternsHolder implements MutableUserHo
      * @see #resolveUsername(String)
      * @see #resolveIdentityFilePath(String, String, int, String)
      */
-    public static HostConfigEntry normalizeEntry(HostConfigEntry entry, String host, int port, String username) throws IOException {
+    public static HostConfigEntry normalizeEntry(
+            HostConfigEntry entry, String host, int port, String username)
+                throws IOException {
         if (entry == null) {
             return null;
         }
@@ -715,7 +716,10 @@ public class HostConfigEntry extends HostPatternsHolder implements MutableUserHo
 
         Map<String, String> props = entry.getProperties();
         if (GenericUtils.size(props) > 0) {
-            normal.setProperties(new TreeMap<>(props));
+            normal.setProperties(
+                NavigableMapBuilder.<String, String>builder(String.CASE_INSENSITIVE_ORDER)
+                    .putAll(props)
+                    .build());
         }
 
         Collection<String> ids = entry.getIdentities();
@@ -780,10 +784,6 @@ public class HostConfigEntry extends HostPatternsHolder implements MutableUserHo
         }
     }
 
-    public static List<HostConfigEntry> readHostConfigEntries(File file) throws IOException {
-        return readHostConfigEntries(file.toPath(), IoUtils.EMPTY_OPEN_OPTIONS);
-    }
-
     public static List<HostConfigEntry> readHostConfigEntries(Path path, OpenOption... options) throws IOException {
         try (InputStream input = Files.newInputStream(path, options)) {
             return readHostConfigEntries(input, true);
@@ -793,12 +793,6 @@ public class HostConfigEntry extends HostPatternsHolder implements MutableUserHo
     public static List<HostConfigEntry> readHostConfigEntries(URL url) throws IOException {
         try (InputStream input = url.openStream()) {
             return readHostConfigEntries(input, true);
-        }
-    }
-
-    public static List<HostConfigEntry> readHostConfigEntries(String filePath) throws IOException {
-        try (InputStream inStream = new FileInputStream(filePath)) {
-            return readHostConfigEntries(inStream, true);
         }
     }
 
@@ -833,7 +827,7 @@ public class HostConfigEntry extends HostPatternsHolder implements MutableUserHo
                 continue;
             }
 
-            int pos = line.indexOf(SshConfigFileReader.COMMENT_CHAR);
+            int pos = line.indexOf(ConfigFileReaderSupport.COMMENT_CHAR);
             if (pos == 0) {
                 continue;
             }
@@ -1007,17 +1001,17 @@ public class HostConfigEntry extends HostPatternsHolder implements MutableUserHo
         return entries;
     }
 
-    public static void writeHostConfigEntries(File file, Collection<? extends HostConfigEntry> entries) throws IOException {
-        writeHostConfigEntries(Objects.requireNonNull(file, "No file").toPath(), entries, IoUtils.EMPTY_OPEN_OPTIONS);
-    }
-
-    public static void writeHostConfigEntries(Path path, Collection<? extends HostConfigEntry> entries, OpenOption... options) throws IOException {
+    public static void writeHostConfigEntries(
+            Path path, Collection<? extends HostConfigEntry> entries, OpenOption... options)
+                throws IOException {
         try (OutputStream outputStream = Files.newOutputStream(path, options)) {
             writeHostConfigEntries(outputStream, true, entries);
         }
     }
 
-    public static void writeHostConfigEntries(OutputStream outputStream, boolean okToClose, Collection<? extends HostConfigEntry> entries) throws IOException {
+    public static void writeHostConfigEntries(
+            OutputStream outputStream, boolean okToClose, Collection<? extends HostConfigEntry> entries)
+                throws IOException {
         if (GenericUtils.isEmpty(entries)) {
             return;
         }
@@ -1104,8 +1098,7 @@ public class HostConfigEntry extends HostPatternsHolder implements MutableUserHo
                         case LOCAL_USER_MACRO:
                             sb.append(ValidateUtils.checkNotNullAndNotEmpty(OsUtils.getCurrentUser(), "No local user name value"));
                             break;
-                        case LOCAL_HOST_MACRO:
-                        {
+                        case LOCAL_HOST_MACRO: {
                             InetAddress address = Objects.requireNonNull(InetAddress.getLocalHost(), "No local address");
                             sb.append(ValidateUtils.checkNotNullAndNotEmpty(address.getHostName(), "No local name"));
                             break;

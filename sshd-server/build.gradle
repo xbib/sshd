@@ -1,4 +1,0 @@
-dependencies {
-    compile project(':sshd-client')
-    testCompile project(':sshd-fs')
-}

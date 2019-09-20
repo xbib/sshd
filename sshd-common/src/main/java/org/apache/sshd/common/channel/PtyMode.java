@@ -24,8 +24,10 @@ import java.util.Comparator;
 import java.util.EnumMap;
 import java.util.EnumSet;
 import java.util.Map;
+import java.util.NavigableMap;
 import java.util.Set;
 import java.util.function.Function;
+import java.util.function.ToIntFunction;
 
 import org.apache.sshd.common.util.GenericUtils;
 
@@ -116,7 +118,7 @@ public enum PtyMode {
     ///////////////////////////////// I-flags ////////////////////////////////
 
     /**
-     * The ignore parity flag.  The parameter SHOULD be 0 if this flag
+     * The ignore parity flag. The parameter SHOULD be 0 if this flag
      * is FALSE, and 1 if it is TRUE.
      */
     IGNPAR(30),
@@ -165,7 +167,7 @@ public enum PtyMode {
      */
     IMAXBEL(41),
     /**
-     * @see <A HREF="https://tools.ietf.org/html/draft-sgtatham-secsh-iutf8-01">IUTF8 Terminal Mode in Secure Shell</A>
+     * @see <A HREF="https://tools.ietf.org/html/rfc8160">IUTF8 Terminal Mode in Secure Shell</A>
      */
     IUTF8(42),
 
@@ -291,11 +293,31 @@ public enum PtyMode {
     /**
      * An un-modifiable {@link Set} of all defined {@link PtyMode}s
      */
-    public static final Set<PtyMode> MODES = Collections.unmodifiableSet(EnumSet.allOf(PtyMode.class));
+    public static final Set<PtyMode> MODES =
+        Collections.unmodifiableSet(EnumSet.allOf(PtyMode.class));
 
-    private static final Map<Integer, PtyMode> COMMANDS =
-            Collections.unmodifiableMap(
-                    GenericUtils.toSortedMap(MODES, PtyMode::toInt, Function.identity(), Comparator.naturalOrder()));
+    public static final NavigableMap<Integer, PtyMode> COMMANDS =
+        Collections.unmodifiableNavigableMap(
+            GenericUtils.toSortedMap(MODES, PtyMode::toInt, Function.identity(), Comparator.naturalOrder()));
+
+    /**
+     * A {@code null}-safe {@link ToIntFunction} that returns the {@link PtyMode#toInt()} value and (-1) for {@code null}
+     */
+    public static final ToIntFunction<PtyMode> OPCODE_EXTRACTOR = v -> (v == null) ? -1 : v.toInt();
+
+    /**
+     * A {@code null}-safe {@link Comparator} of {@link PtyMode} values
+     * according to their {@link PtyMode#toInt()} value
+     * @see #OPCODE_EXTRACTOR
+     */
+    public static final Comparator<PtyMode> BY_OPCODE = new Comparator<PtyMode>() {
+            @Override
+            public int compare(PtyMode o1, PtyMode o2) {
+                int v1 = OPCODE_EXTRACTOR.applyAsInt(o1);
+                int v2 = OPCODE_EXTRACTOR.applyAsInt(o2);
+                return Integer.compare(v1, v2);
+            }
+        };
 
     private final int v;
 
@@ -314,6 +336,20 @@ public enum PtyMode {
      */
     public static PtyMode fromInt(int b) {
         return COMMANDS.get(0x00FF & b);
+    }
+
+    public static PtyMode fromName(String name) {
+        if (GenericUtils.isEmpty(name)) {
+            return null;
+        }
+
+        for (PtyMode m : MODES) {
+            if (name.equalsIgnoreCase(m.name())) {
+                return m;
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -389,6 +425,63 @@ public enum PtyMode {
     }
 
     /**
+     * @param modes The {@link Map} of {@link PtyMode}s resolved by the &quot;pty-req&quot; message.
+     * @param enablers A {@link Collection} of enabler settings to be consulted
+     * @param defaultValue The default value to be used if no definite setting could be deduced
+     * @return {@code true} if the CR mode is enabled:
+     * <UL>
+     *      <LI>
+     *      If modes or enablers are {@code null}/empty
+     *      then defaultValue is used
+     *      </LI>
+     *
+     *      <LI>
+     *      If <U>any</U> of the enablers modes are enabled
+     *      then the CR mode is enabled.
+     *      </LI>
+     *
+     *      <LI>
+     *      If <U>none</U> of the enablers modes were specified
+     *      then use defaultValue
+     *      </LI>
+     *
+     *      <LI>
+     *      Otherwise (i.e., at least one or more of the enablers
+     *      modes were specified, but <U>all</U> of them said {@code no})
+     *      then {@code false}.
+     *      </LI>
+     * </UL>
+     */
+    public static boolean getBooleanSettingValue(
+            Map<PtyMode, ?> modes, Collection<PtyMode> enablers, boolean defaultValue) {
+        if (GenericUtils.isEmpty(modes) || GenericUtils.isEmpty(enablers)) {
+            return defaultValue;
+        }
+
+        int settingsCount = 0;
+        for (PtyMode m : enablers) {
+            Object v = modes.get(m);
+            if (v == null) {
+                continue;
+            }
+
+            settingsCount++;
+
+            // if any setting says yes then use it
+            if (getBooleanSettingValue(v)) {
+                return true;
+            }
+        }
+
+        // ALL (!) settings have said NO
+        if (settingsCount > 0) {
+            return false;
+        } else {
+            return defaultValue;    // none of the settings has been found - assume default
+        }
+    }
+
+    /**
      * @param v The value to be tested
      * @return {@code true} if <U>all</U> of these conditions hold:
      * <UL>
@@ -407,5 +500,20 @@ public enum PtyMode {
      */
     public static boolean getBooleanSettingValue(int v) {
         return v != 0;
+    }
+
+    /**
+     * @param m The {@link PtyMode}
+     * @return {@code true} if not {@code null} and one of the settings that
+     * refers to a character value - name usually starts with {@code Vxxx}
+     */
+    public static boolean isCharSetting(PtyMode m) {
+        if (m == null) {
+            return false;
+        }
+
+        String name = m.name();
+        char ch = name.charAt(0);
+        return (ch == 'v') || (ch == 'V');
     }
 }

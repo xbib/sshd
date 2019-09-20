@@ -19,6 +19,8 @@
 package org.apache.sshd.common.helpers;
 
 import java.util.Collection;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -27,17 +29,15 @@ import java.util.concurrent.CopyOnWriteArraySet;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
 
-import org.apache.sshd.common.agent.SshAgentFactory;
-import org.apache.sshd.common.AttributeStore;
 import org.apache.sshd.common.Factory;
 import org.apache.sshd.common.FactoryManager;
-import org.apache.sshd.common.NamedFactory;
 import org.apache.sshd.common.PropertyResolver;
 import org.apache.sshd.common.PropertyResolverUtils;
 import org.apache.sshd.common.ServiceFactory;
 import org.apache.sshd.common.SyspropsMapWrapper;
-import org.apache.sshd.common.channel.Channel;
+import org.apache.sshd.common.channel.ChannelFactory;
 import org.apache.sshd.common.channel.ChannelListener;
 import org.apache.sshd.common.channel.RequestHandler;
 import org.apache.sshd.common.channel.throttle.ChannelStreamPacketWriterResolver;
@@ -45,16 +45,18 @@ import org.apache.sshd.common.config.VersionProperties;
 import org.apache.sshd.common.file.FileSystemFactory;
 import org.apache.sshd.common.forward.ForwardingFilterFactory;
 import org.apache.sshd.common.forward.PortForwardingEventListener;
-import org.apache.sshd.common.forward.WrappedForwardingFilter;
 import org.apache.sshd.common.io.DefaultIoServiceFactoryFactory;
+import org.apache.sshd.common.io.IoServiceEventListener;
 import org.apache.sshd.common.io.IoServiceFactory;
 import org.apache.sshd.common.io.IoServiceFactoryFactory;
 import org.apache.sshd.common.kex.AbstractKexFactoryManager;
 import org.apache.sshd.common.random.Random;
 import org.apache.sshd.common.session.ConnectionService;
 import org.apache.sshd.common.session.ReservedSessionMessagesHandler;
+import org.apache.sshd.common.session.SessionDisconnectHandler;
 import org.apache.sshd.common.session.SessionListener;
 import org.apache.sshd.common.session.UnknownChannelReferenceHandler;
+import org.apache.sshd.common.session.helpers.AbstractSessionFactory;
 import org.apache.sshd.common.session.helpers.SessionTimeoutListener;
 import org.apache.sshd.common.util.EventListenerUtils;
 import org.apache.sshd.common.util.ValidateUtils;
@@ -67,12 +69,10 @@ public abstract class AbstractFactoryManager extends AbstractKexFactoryManager i
     protected IoServiceFactoryFactory ioServiceFactoryFactory;
     protected IoServiceFactory ioServiceFactory;
     protected Factory<Random> randomFactory;
-    protected List<NamedFactory<Channel>> channelFactories;
-    protected SshAgentFactory agentFactory;
+    protected List<ChannelFactory> channelFactories;
     protected ScheduledExecutorService executor;
     protected boolean shutdownExecutor;
     protected ForwardingFilterFactory forwarderFactory;
-    protected WrappedForwardingFilter forwardingFilter;
     protected FileSystemFactory fileSystemFactory;
     protected List<ServiceFactory> serviceFactories;
     protected List<RequestHandler<ConnectionService>> globalRequestHandlers;
@@ -89,8 +89,10 @@ public abstract class AbstractFactoryManager extends AbstractKexFactoryManager i
     private final Map<AttributeKey<?>, Object> attributes = new ConcurrentHashMap<>();
     private PropertyResolver parentResolver = SyspropsMapWrapper.SYSPROPS_RESOLVER;
     private ReservedSessionMessagesHandler reservedSessionMessagesHandler;
+    private SessionDisconnectHandler sessionDisconnectHandler;
     private ChannelStreamPacketWriterResolver channelStreamPacketWriterResolver;
     private UnknownChannelReferenceHandler unknownChannelReferenceHandler;
+    private IoServiceEventListener eventListener;
 
     protected AbstractFactoryManager() {
         ClassLoader loader = getClass().getClassLoader();
@@ -118,6 +120,16 @@ public abstract class AbstractFactoryManager extends AbstractKexFactoryManager i
     }
 
     @Override
+    public IoServiceEventListener getIoServiceEventListener() {
+        return eventListener;
+    }
+
+    @Override
+    public void setIoServiceEventListener(IoServiceEventListener listener) {
+        eventListener = listener;
+    }
+
+    @Override
     public Factory<Random> getRandomFactory() {
         return randomFactory;
     }
@@ -132,9 +144,26 @@ public abstract class AbstractFactoryManager extends AbstractKexFactoryManager i
     }
 
     @Override
+    public int getAttributesCount() {
+        return attributes.size();
+    }
+
+    @Override
     @SuppressWarnings("unchecked")
     public <T> T getAttribute(AttributeKey<T> key) {
         return (T) attributes.get(Objects.requireNonNull(key, "No key"));
+    }
+
+    @Override
+    public Collection<AttributeKey<?>> attributeKeys() {
+        return attributes.isEmpty() ? Collections.emptySet() : new HashSet<>(attributes.keySet());
+    }
+
+    @Override
+    @SuppressWarnings({ "unchecked", "rawtypes" })
+    public <T> T computeAttributeIfAbsent(
+            AttributeKey<T> key, Function<? super AttributeKey<T>, ? extends T> resolver) {
+        return (T) attributes.computeIfAbsent(Objects.requireNonNull(key, "No key"), (Function) resolver);
     }
 
     @Override
@@ -152,8 +181,8 @@ public abstract class AbstractFactoryManager extends AbstractKexFactoryManager i
     }
 
     @Override
-    public <T> T resolveAttribute(AttributeKey<T> key) {
-        return AttributeStore.resolveAttribute(this, key);
+    public void clearAttributes() {
+        attributes.clear();
     }
 
     @Override
@@ -167,15 +196,17 @@ public abstract class AbstractFactoryManager extends AbstractKexFactoryManager i
 
     @Override
     public String getVersion() {
-        return PropertyResolverUtils.getStringProperty(VersionProperties.getVersionProperties(), "sshd-version", DEFAULT_VERSION).toUpperCase();
+        String version = PropertyResolverUtils.getStringProperty(
+            VersionProperties.getVersionProperties(), VersionProperties.REPORTED_VERSION, DEFAULT_VERSION);
+        return version.toUpperCase();
     }
 
     @Override
-    public List<NamedFactory<Channel>> getChannelFactories() {
+    public List<ChannelFactory> getChannelFactories() {
         return channelFactories;
     }
 
-    public void setChannelFactories(List<NamedFactory<Channel>> channelFactories) {
+    public void setChannelFactories(List<ChannelFactory> channelFactories) {
         this.channelFactories = channelFactories;
     }
 
@@ -194,15 +225,6 @@ public abstract class AbstractFactoryManager extends AbstractKexFactoryManager i
         } else {
             PropertyResolverUtils.updateProperty(this, NIO_WORKERS, null);
         }
-    }
-
-    @Override
-    public SshAgentFactory getAgentFactory() {
-        return agentFactory;
-    }
-
-    public void setAgentFactory(SshAgentFactory agentFactory) {
-        this.agentFactory = agentFactory;
     }
 
     @Override
@@ -226,15 +248,6 @@ public abstract class AbstractFactoryManager extends AbstractKexFactoryManager i
 
     public void setForwarderFactory(ForwardingFilterFactory forwarderFactory) {
         this.forwarderFactory = forwarderFactory;
-    }
-
-    @Override
-    public WrappedForwardingFilter getForwardingFilter() {
-        return forwardingFilter;
-    }
-
-    public void setForwardingFilter(WrappedForwardingFilter forwardingFilter) {
-        this.forwardingFilter = forwardingFilter;
     }
 
     @Override
@@ -272,6 +285,16 @@ public abstract class AbstractFactoryManager extends AbstractKexFactoryManager i
     @Override
     public void setReservedSessionMessagesHandler(ReservedSessionMessagesHandler handler) {
         reservedSessionMessagesHandler = handler;
+    }
+
+    @Override
+    public SessionDisconnectHandler getSessionDisconnectHandler() {
+        return sessionDisconnectHandler;
+    }
+
+    @Override
+    public void setSessionDisconnectHandler(SessionDisconnectHandler sessionDisconnectHandler) {
+        this.sessionDisconnectHandler = sessionDisconnectHandler;
     }
 
     @Override
@@ -432,7 +455,7 @@ public abstract class AbstractFactoryManager extends AbstractKexFactoryManager i
         }
     }
 
-    protected void setupSessionTimeout() {
+    protected void setupSessionTimeout(AbstractSessionFactory<?, ?> sessionFactory) {
         // set up the the session timeout listener and schedule it
         sessionTimeoutListener = createSessionTimeoutListener();
         addSessionListener(sessionTimeoutListener);
@@ -441,15 +464,15 @@ public abstract class AbstractFactoryManager extends AbstractKexFactoryManager i
                 .scheduleAtFixedRate(sessionTimeoutListener, 1, 1, TimeUnit.SECONDS);
     }
 
-    protected void removeSessionTimeout() {
-        stopSessionTimeoutListener();
+    protected void removeSessionTimeout(AbstractSessionFactory<?, ?> sessionFactory) {
+        stopSessionTimeoutListener(sessionFactory);
     }
 
     protected SessionTimeoutListener createSessionTimeoutListener() {
         return new SessionTimeoutListener();
     }
 
-    protected void stopSessionTimeoutListener() {
+    protected void stopSessionTimeoutListener(AbstractSessionFactory<?, ?> sessionFactory) {
         // cancel the timeout monitoring task
         if (timeoutListenerFuture != null) {
             try {
@@ -486,7 +509,7 @@ public abstract class AbstractFactoryManager extends AbstractKexFactoryManager i
         Objects.requireNonNull(getRandomFactory(), "RandomFactory not set");
 
         if (getIoServiceFactoryFactory() == null) {
-            setIoServiceFactoryFactory(new DefaultIoServiceFactoryFactory());
+            setIoServiceFactoryFactory(DefaultIoServiceFactoryFactory.getDefaultIoServiceFactoryFactoryInstance());
         }
     }
 }

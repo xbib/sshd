@@ -23,9 +23,11 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import org.apache.logging.log4j.Logger;
 import org.apache.sshd.common.PropertyResolver;
 import org.apache.sshd.common.util.buffer.BufferUtils;
+import org.apache.sshd.common.util.logging.LoggingUtils;
+import org.apache.sshd.common.util.logging.SimplifiedLog;
+import org.apache.logging.log4j.Logger;
 
 /**
  * Dumps everything that is written to the stream to the logger
@@ -34,7 +36,7 @@ import org.apache.sshd.common.util.buffer.BufferUtils;
 public class LoggingFilterOutputStream extends FilterOutputStream {
 
     private final String msg;
-    private final Logger log;
+    private final SimplifiedLog log;
     private final int chunkSize;
     private final AtomicInteger writeCount = new AtomicInteger(0);
 
@@ -45,7 +47,7 @@ public class LoggingFilterOutputStream extends FilterOutputStream {
     public LoggingFilterOutputStream(OutputStream out, String msg, Logger log, int chunkSize) {
         super(out);
         this.msg = msg;
-        this.log = log;
+        this.log = LoggingUtils.wrap(log);
         this.chunkSize = chunkSize;
     }
 

@@ -48,16 +48,20 @@ import java.security.spec.ECParameterSpec;
 import java.security.spec.InvalidKeySpecException;
 import java.security.spec.RSAPublicKeySpec;
 import java.util.AbstractMap.SimpleImmutableEntry;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
+import java.util.NavigableSet;
 import java.util.Objects;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.TreeSet;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.apache.sshd.common.Factory;
@@ -71,6 +75,7 @@ import org.apache.sshd.common.digest.DigestFactory;
 import org.apache.sshd.common.digest.DigestUtils;
 import org.apache.sshd.common.keyprovider.KeyPairProvider;
 import org.apache.sshd.common.util.GenericUtils;
+import org.apache.sshd.common.util.MapEntryUtils.NavigableMapBuilder;
 import org.apache.sshd.common.util.OsUtils;
 import org.apache.sshd.common.util.ValidateUtils;
 import org.apache.sshd.common.util.buffer.Buffer;
@@ -109,9 +114,10 @@ public final class KeyUtils {
      * permissions are enforced on key files
      */
     public static final Set<PosixFilePermission> STRICTLY_PROHIBITED_FILE_PERMISSION =
-            Collections.unmodifiableSet(
-                    EnumSet.of(PosixFilePermission.GROUP_READ, PosixFilePermission.GROUP_WRITE, PosixFilePermission.GROUP_EXECUTE,
-                            PosixFilePermission.OTHERS_READ, PosixFilePermission.OTHERS_WRITE, PosixFilePermission.OTHERS_EXECUTE));
+        Collections.unmodifiableSet(
+            EnumSet.of(
+                PosixFilePermission.GROUP_READ, PosixFilePermission.GROUP_WRITE, PosixFilePermission.GROUP_EXECUTE,
+                PosixFilePermission.OTHERS_READ, PosixFilePermission.OTHERS_WRITE, PosixFilePermission.OTHERS_EXECUTE));
 
     /**
      * System property that can be used to control the default fingerprint factory used for keys.
@@ -127,6 +133,9 @@ public final class KeyUtils {
      */
     public static final DigestFactory DEFAULT_FINGERPRINT_DIGEST_FACTORY = BuiltinDigests.sha256;
 
+    public static final String RSA_SHA256_KEY_TYPE_ALIAS = "rsa-sha2-256";
+    public static final String RSA_SHA512_KEY_TYPE_ALIAS = "rsa-sha2-512";
+
     private static final AtomicReference<DigestFactory> DEFAULT_DIGEST_HOLDER = new AtomicReference<>();
 
     private static final Map<String, PublicKeyEntryDecoder<?, ?>> BY_KEY_TYPE_DECODERS_MAP =
@@ -134,6 +143,12 @@ public final class KeyUtils {
 
     private static final Map<Class<?>, PublicKeyEntryDecoder<?, ?>> BY_KEY_CLASS_DECODERS_MAP =
             new HashMap<>();
+
+    private static final Map<String, String> KEY_TYPE_ALIASES =
+        NavigableMapBuilder.<String, String>builder(String.CASE_INSENSITIVE_ORDER)
+            .put(RSA_SHA256_KEY_TYPE_ALIAS, KeyPairProvider.SSH_RSA)
+            .put(RSA_SHA512_KEY_TYPE_ALIAS, KeyPairProvider.SSH_RSA)
+            .build();
 
     static {
         registerPublicKeyEntryDecoder(RSAPublicKeyDecoder.INSTANCE);
@@ -291,10 +306,9 @@ public final class KeyUtils {
 
     /**
      * @param decoder The decoder to register
-     * @throws IllegalArgumentException if no decoder or not key type or no
-     *                                  supported names for the decoder
+     * @throws IllegalArgumentException if no decoder or not key type or no supported names for the decoder
      * @see PublicKeyEntryDecoder#getPublicKeyType()
-     * @see PublicKeyEntryDecoder#getSupportedTypeNames()
+     * @see PublicKeyEntryDecoder#getSupportedKeyTypes()
      */
     public static void registerPublicKeyEntryDecoder(PublicKeyEntryDecoder<?, ?> decoder) {
         Objects.requireNonNull(decoder, "No decoder specified");
@@ -306,21 +320,111 @@ public final class KeyUtils {
             BY_KEY_CLASS_DECODERS_MAP.put(prvType, decoder);
         }
 
-        Collection<String> names = ValidateUtils.checkNotNullAndNotEmpty(decoder.getSupportedTypeNames(), "No supported key type");
-        synchronized (BY_KEY_TYPE_DECODERS_MAP) {
-            for (String n : names) {
-                PublicKeyEntryDecoder<?, ?> prev = BY_KEY_TYPE_DECODERS_MAP.put(n, decoder);
-                if (prev != null) {
-                    //noinspection UnnecessaryContinue
-                    continue;   // debug breakpoint
-                }
+        registerPublicKeyEntryDecoderKeyTypes(decoder);
+    }
+
+    /**
+     * Registers the specified decoder for all the types it {@link PublicKeyEntryDecoder#getSupportedKeyTypes() supports}
+     *
+     * @param decoder The (never {@code null}) {@link PublicKeyEntryDecoder decoder} to register
+     * @see #registerPublicKeyEntryDecoderForKeyType(String, PublicKeyEntryDecoder)
+     */
+    public static void registerPublicKeyEntryDecoderKeyTypes(PublicKeyEntryDecoder<?, ?> decoder) {
+        Objects.requireNonNull(decoder, "No decoder specified");
+
+        Collection<String> names =
+            ValidateUtils.checkNotNullAndNotEmpty(decoder.getSupportedKeyTypes(), "No supported key types");
+        for (String n : names) {
+            PublicKeyEntryDecoder<?, ?> prev = registerPublicKeyEntryDecoderForKeyType(n, decoder);
+            if (prev != null) {
+                //noinspection UnnecessaryContinue
+                continue;   // debug breakpoint
             }
         }
     }
 
     /**
-     * @param keyType The {@code OpenSSH} key type string -  e.g., {@code ssh-rsa, ssh-dss}
-     *                - ignored if {@code null}/empty
+     * @param keyType The key (never {@code null}/empty) key type
+     * @param decoder The (never {@code null}) {@link PublicKeyEntryDecoder decoder} to register
+     * @return The previously registered decoder for this key type - {@code null} if none
+     */
+    public static PublicKeyEntryDecoder<?, ?> registerPublicKeyEntryDecoderForKeyType(String keyType, PublicKeyEntryDecoder<?, ?> decoder) {
+        keyType = ValidateUtils.checkNotNullAndNotEmpty(keyType, "No key type specified");
+        Objects.requireNonNull(decoder, "No decoder specified");
+
+        synchronized (BY_KEY_TYPE_DECODERS_MAP) {
+            return BY_KEY_TYPE_DECODERS_MAP.put(keyType, decoder);
+        }
+    }
+
+    /**
+     * @param decoder The (never {@code null}) {@link PublicKeyEntryDecoder decoder} to unregister
+     * @return The case <U>insensitive</U> {@link NavigableSet} of all the effectively un-registered key types
+     * out of all the {@link PublicKeyEntryDecoder#getSupportedKeyTypes() supported} ones.
+     * @see #unregisterPublicKeyEntryDecoderKeyTypes(PublicKeyEntryDecoder)
+     */
+    public static NavigableSet<String> unregisterPublicKeyEntryDecoder(PublicKeyEntryDecoder<?, ?> decoder) {
+        Objects.requireNonNull(decoder, "No decoder specified");
+
+        Class<?> pubType = Objects.requireNonNull(decoder.getPublicKeyType(), "No public key type declared");
+        Class<?> prvType = Objects.requireNonNull(decoder.getPrivateKeyType(), "No private key type declared");
+        synchronized (BY_KEY_CLASS_DECODERS_MAP) {
+            BY_KEY_CLASS_DECODERS_MAP.remove(pubType);
+            BY_KEY_CLASS_DECODERS_MAP.remove(prvType);
+        }
+
+        return unregisterPublicKeyEntryDecoderKeyTypes(decoder);
+    }
+
+    /**
+     * Unregisters the specified decoder for all the types it supports
+     *
+     * @param decoder The (never {@code null}) {@link PublicKeyEntryDecoder decoder} to unregister
+     * @return The case <U>insensitive</U> {@link NavigableSet} of all the effectively un-registered key types
+     * out of all the {@link PublicKeyEntryDecoder#getSupportedKeyTypes() supported} ones.
+     * @see #unregisterPublicKeyEntryDecoderForKeyType(String)
+     */
+    public static NavigableSet<String> unregisterPublicKeyEntryDecoderKeyTypes(PublicKeyEntryDecoder<?, ?> decoder) {
+        Objects.requireNonNull(decoder, "No decoder specified");
+
+        Collection<String> names = ValidateUtils.checkNotNullAndNotEmpty(
+            decoder.getSupportedKeyTypes(), "No supported key types");
+        NavigableSet<String> removed = Collections.emptyNavigableSet();
+        for (String n : names) {
+            PublicKeyEntryDecoder<?, ?> prev = unregisterPublicKeyEntryDecoderForKeyType(n);
+            if (prev == null) {
+                continue;
+            }
+
+            if (removed.isEmpty()) {
+                removed = new TreeSet<>(String.CASE_INSENSITIVE_ORDER);
+            }
+
+            if (!removed.add(n)) {
+                //noinspection UnnecessaryContinue
+                continue;   // debug breakpoint
+            }
+        }
+
+        return removed;
+    }
+
+    /**
+     * Unregister the decoder registered for the specified key type
+     *
+     * @param keyType The key (never {@code null}/empty) key type
+     * @return The unregistered {@link PublicKeyEntryDecoder} - {@code null} if none registered for this key type
+     */
+    public static PublicKeyEntryDecoder<?, ?> unregisterPublicKeyEntryDecoderForKeyType(String keyType) {
+        keyType = ValidateUtils.checkNotNullAndNotEmpty(keyType, "No key type specified");
+
+        synchronized (BY_KEY_TYPE_DECODERS_MAP) {
+            return BY_KEY_TYPE_DECODERS_MAP.remove(keyType);
+        }
+    }
+
+    /**
+     * @param keyType The {@code OpenSSH} key type string -  e.g., {@code ssh-rsa, ssh-dss} - ignored if {@code null}/empty
      * @return The registered {@link PublicKeyEntryDecoder} or {code null} if not found
      */
     public static PublicKeyEntryDecoder<?, ?> getPublicKeyEntryDecoder(String keyType) {
@@ -522,7 +626,7 @@ public final class KeyUtils {
     /**
      * @param f The {@link Factory} to create the {@link Digest} to use
      * @param s The {@link String} to digest - ignored if {@code null}/empty,
-     *          otherwise its UTF-8 representation is used as input for the fingerprint
+     * otherwise its UTF-8 representation is used as input for the fingerprint
      * @return The fingerprint - {@code null} if {@code null}/empty input.
      * <B>Note:</B> if exception encountered then returns the exception's simple class name
      * @see #getFingerPrint(Digest, String, Charset)
@@ -535,7 +639,7 @@ public final class KeyUtils {
      * @param f       The {@link Factory} to create the {@link Digest} to use
      * @param s       The {@link String} to digest - ignored if {@code null}/empty
      * @param charset The {@link Charset} to use in order to convert the
-     *                string to its byte representation to use as input for the fingerprint
+     * string to its byte representation to use as input for the fingerprint
      * @return The fingerprint - {@code null} if {@code null}/empty input
      * <B>Note:</B> if exception encountered then returns the exception's simple class name
      * @see DigestUtils#getFingerPrint(Digest, String, Charset)
@@ -560,7 +664,7 @@ public final class KeyUtils {
      * @param d       The {@link Digest} to use to calculate the fingerprint
      * @param s       The string to digest - ignored if {@code null}/empty
      * @param charset The {@link Charset} to use in order to convert the
-     *                string to its byte representation to use as input for the fingerprint
+     * string to its byte representation to use as input for the fingerprint
      * @return The fingerprint - {@code null} if {@code null}/empty input.
      * <B>Note:</B> if exception encountered then returns the exception's simple class name
      * @see DigestUtils#getFingerPrint(Digest, String, Charset)
@@ -581,7 +685,7 @@ public final class KeyUtils {
      * @param expected The expected fingerprint if {@code null} or empty then returns a failure
      * with the default fingerprint.
      * @param key the {@link PublicKey} - if {@code null} then returns null.
-     * @return {@code SimpleImmutableEntry<Boolean, String>} - key is success indicator, value is actual fingerprint,
+     * @return key is success indicator, value is actual fingerprint,
      * {@code null} if no key.
      * @see #getDefaultFingerPrintFactory()
      * @see #checkFingerPrint(String, Factory, PublicKey)
@@ -595,7 +699,7 @@ public final class KeyUtils {
      * with the default fingerprint.
      * @param f The {@link Factory} to be used to generate the default {@link Digest} for the key
      * @param key the {@link PublicKey} - if {@code null} then returns null.
-     * @return {@code SimpleImmutableEntry<Boolean, String>} - key is success indicator, value is actual fingerprint,
+     * @return key is success indicator, value is actual fingerprint,
      * {@code null} if no key.
      */
     public static SimpleImmutableEntry<Boolean, String> checkFingerPrint(String expected, Factory<? extends Digest> f, PublicKey key) {
@@ -607,7 +711,7 @@ public final class KeyUtils {
      * with the default fingerprint.
      * @param d The {@link Digest} to be used to generate the default fingerprint for the key
      * @param key the {@link PublicKey} - if {@code null} then returns null.
-     * @return {@code SimpleImmutableEntry<Boolean, String>} - key is success indicator, value is actual fingerprint,
+     * @return key is success indicator, value is actual fingerprint,
      * {@code null} if no key.
      */
     public static SimpleImmutableEntry<Boolean, String> checkFingerPrint(String expected, Digest d, PublicKey key) {
@@ -650,8 +754,8 @@ public final class KeyUtils {
 
     /**
      * @param kp a key pair - ignored if {@code null}. If the private
-     *           key is non-{@code null} then it is used to determine the type,
-     *           otherwise the public one is used.
+     * key is non-{@code null} then it is used to determine the type,
+     * otherwise the public one is used.
      * @return the key type or {@code null} if cannot determine it
      * @see #getKeyType(Key)
      */
@@ -692,6 +796,114 @@ public final class KeyUtils {
         }
 
         return null;
+    }
+
+    /**
+     * @param keyType A key type name - ignored if {@code null}/empty
+     * @return A {@link List} of they canonical key name and all its aliases
+     * @see #getCanonicalKeyType(String)
+     */
+    public static List<String> getAllEquivalentKeyTypes(String keyType) {
+        if (GenericUtils.isEmpty(keyType)) {
+            return Collections.emptyList();
+        }
+
+        String canonicalName = getCanonicalKeyType(keyType);
+        List<String> equivalents = new ArrayList<>();
+        equivalents.add(canonicalName);
+        synchronized (KEY_TYPE_ALIASES) {
+            for (Map.Entry<String, String> ae : KEY_TYPE_ALIASES.entrySet()) {
+                String alias = ae.getKey();
+                String name = ae.getValue();
+                if (canonicalName.equalsIgnoreCase(name)) {
+                    equivalents.add(alias);
+                }
+            }
+        }
+
+        return equivalents;
+    }
+
+    /**
+     * @param keyType The available key-type - ignored if {@code null}/empty
+     * @return The canonical key type - same as input if no alias registered
+     * for the provided key type
+     * @see #RSA_SHA256_KEY_TYPE_ALIAS
+     * @see #RSA_SHA512_KEY_TYPE_ALIAS
+     */
+    public static String getCanonicalKeyType(String keyType) {
+        if (GenericUtils.isEmpty(keyType)) {
+            return keyType;
+        }
+
+        String canonicalName;
+        synchronized (KEY_TYPE_ALIASES) {
+            canonicalName = KEY_TYPE_ALIASES.get(keyType);
+        }
+
+        if (GenericUtils.isEmpty(canonicalName)) {
+            return keyType;
+        }
+
+        return canonicalName;
+    }
+
+    /**
+     * @return A case insensitive {@link NavigableSet} of the currently registered
+     * key type &quot;aliases&quot;.
+     * @see #getCanonicalKeyType(String)
+     */
+    public static NavigableSet<String> getRegisteredKeyTypeAliases() {
+        synchronized (KEY_TYPE_ALIASES) {
+            return KEY_TYPE_ALIASES.isEmpty()
+                 ? Collections.emptyNavigableSet()
+                 : GenericUtils.asSortedSet(String.CASE_INSENSITIVE_ORDER, KEY_TYPE_ALIASES.keySet());
+        }
+    }
+
+    /**
+     * Registers a collection of aliases to a canonical key type
+     *
+     * @param keyType The (never {@code null}/empty) canonical name
+     * @param aliases The (never {@code null}/empty) aliases
+     * @return A {@link List} of the replaced aliases - empty
+     * if no previous aliases for the canonical name
+     */
+    public static List<String> registerCanonicalKeyTypes(String keyType, Collection<String> aliases) {
+        ValidateUtils.checkNotNullAndNotEmpty(keyType, "No key type value");
+        ValidateUtils.checkNotNullAndNotEmpty(aliases, "No aliases provided");
+
+        List<String> replaced = Collections.emptyList();
+        synchronized (KEY_TYPE_ALIASES) {
+            for (String a : aliases) {
+                ValidateUtils.checkNotNullAndNotEmpty(a, "Null/empty alias registration for %s", keyType);
+                String prev = KEY_TYPE_ALIASES.put(a, keyType);
+                if (GenericUtils.isEmpty(prev)) {
+                    continue;
+                }
+
+                if (replaced.isEmpty()) {
+                    replaced = new ArrayList<>();
+                }
+                replaced.add(prev);
+            }
+        }
+
+        return replaced;
+    }
+
+    /**
+     * @param alias The alias to unregister (ignored if {@code null}/empty)
+     * @return The associated canonical key type - {@code null} if alias not registered
+     */
+    public static String unregisterCanonicalKeyTypeAlias(String alias) {
+        if (GenericUtils.isEmpty(alias)) {
+            return alias;
+        }
+
+        synchronized (KEY_TYPE_ALIASES) {
+            return KEY_TYPE_ALIASES.remove(alias);
+        }
     }
 
     /**

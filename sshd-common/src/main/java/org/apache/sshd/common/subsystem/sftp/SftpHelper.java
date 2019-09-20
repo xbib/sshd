@@ -54,6 +54,7 @@ import java.util.TreeMap;
 import java.util.concurrent.TimeUnit;
 
 import org.apache.sshd.common.PropertyResolver;
+import org.apache.sshd.common.SshConstants;
 import org.apache.sshd.common.util.GenericUtils;
 import org.apache.sshd.common.util.OsUtils;
 import org.apache.sshd.common.util.ValidateUtils;
@@ -67,7 +68,7 @@ import org.apache.sshd.common.util.buffer.ByteArrayBuffer;
 public final class SftpHelper {
     /**
      * Used to control whether to append the end-of-list indicator for
-     * SSH_FXP_NAME responses via {@link #indicateEndOfNamesList(Buffer, int, PropertyResolver, Boolean)}
+     * SSH_FXP_NAME responses via {@link #indicateEndOfNamesList(Buffer, int, PropertyResolver, boolean)}
      * call, as indicated by <A HREF="https://tools.ietf.org/html/draft-ietf-secsh-filexfer-13#section-9.4">SFTP v6 - section 9.4</A>
      */
     public static final String APPEND_END_OF_LIST_INDICATOR = "sftp-append-eol-indicator";
@@ -77,46 +78,44 @@ public final class SftpHelper {
      */
     public static final boolean DEFAULT_APPEND_END_OF_LIST_INDICATOR = true;
 
-    public static final NavigableMap<Integer, String> DEFAULT_SUBSTATUS_MESSAGE =
-        Collections.unmodifiableNavigableMap(new TreeMap<Integer, String>(Comparator.naturalOrder()) {
-            // Not serializing it
-            private static final long serialVersionUID = 1L;
+    public static final Map<Integer, String> DEFAULT_SUBSTATUS_MESSAGE;
 
-            {
-                put(SftpConstants.SSH_FX_OK, "Success");
-                put(SftpConstants.SSH_FX_EOF, "End of file");
-                put(SftpConstants.SSH_FX_NO_SUCH_FILE, "No such file or directory");
-                put(SftpConstants.SSH_FX_PERMISSION_DENIED, "Permission denied");
-                put(SftpConstants.SSH_FX_FAILURE, "General failure");
-                put(SftpConstants.SSH_FX_BAD_MESSAGE, "Bad message data");
-                put(SftpConstants.SSH_FX_NO_CONNECTION, "No connection to server");
-                put(SftpConstants.SSH_FX_CONNECTION_LOST, "Connection lost");
-                put(SftpConstants.SSH_FX_OP_UNSUPPORTED, "Unsupported operation requested");
-                put(SftpConstants.SSH_FX_INVALID_HANDLE, "Invalid handle value");
-                put(SftpConstants.SSH_FX_NO_SUCH_PATH, "No such path");
-                put(SftpConstants.SSH_FX_FILE_ALREADY_EXISTS, "File/Directory already exists");
-                put(SftpConstants.SSH_FX_WRITE_PROTECT, "File/Directory is write-protected");
-                put(SftpConstants.SSH_FX_NO_MEDIA, "No such meadia");
-                put(SftpConstants.SSH_FX_NO_SPACE_ON_FILESYSTEM, "No space left on device");
-                put(SftpConstants.SSH_FX_QUOTA_EXCEEDED, "Quota exceeded");
-                put(SftpConstants.SSH_FX_UNKNOWN_PRINCIPAL, "Unknown user/group");
-                put(SftpConstants.SSH_FX_LOCK_CONFLICT, "Lock conflict");
-                put(SftpConstants.SSH_FX_DIR_NOT_EMPTY, "Directory not empty");
-                put(SftpConstants.SSH_FX_NOT_A_DIRECTORY, "Accessed location is not a directory");
-                put(SftpConstants.SSH_FX_INVALID_FILENAME, "Invalid filename");
-                put(SftpConstants.SSH_FX_LINK_LOOP, "Link loop");
-                put(SftpConstants.SSH_FX_CANNOT_DELETE, "Cannot remove");
-                put(SftpConstants.SSH_FX_INVALID_PARAMETER, "Invalid parameter");
-                put(SftpConstants.SSH_FX_FILE_IS_A_DIRECTORY, "Accessed location is a directory");
-                put(SftpConstants.SSH_FX_BYTE_RANGE_LOCK_CONFLICT, "Range lock conflict");
-                put(SftpConstants.SSH_FX_BYTE_RANGE_LOCK_REFUSED, "Range lock refused");
-                put(SftpConstants.SSH_FX_DELETE_PENDING, "Delete pending");
-                put(SftpConstants.SSH_FX_FILE_CORRUPT, "Corrupted file/directory");
-                put(SftpConstants.SSH_FX_OWNER_INVALID, "Invalid file/directory owner");
-                put(SftpConstants.SSH_FX_GROUP_INVALID, "Invalid file/directory group");
-                put(SftpConstants.SSH_FX_NO_MATCHING_BYTE_RANGE_LOCK, "No matching byte range lock");
-            }
-        });
+    static {
+        Map<Integer, String> map = new TreeMap<>(Comparator.naturalOrder());
+        map.put(SftpConstants.SSH_FX_OK, "Success");
+        map.put(SftpConstants.SSH_FX_EOF, "End of file");
+        map.put(SftpConstants.SSH_FX_NO_SUCH_FILE, "No such file or directory");
+        map.put(SftpConstants.SSH_FX_PERMISSION_DENIED, "Permission denied");
+        map.put(SftpConstants.SSH_FX_FAILURE, "General failure");
+        map.put(SftpConstants.SSH_FX_BAD_MESSAGE, "Bad message data");
+        map.put(SftpConstants.SSH_FX_NO_CONNECTION, "No connection to server");
+        map.put(SftpConstants.SSH_FX_CONNECTION_LOST, "Connection lost");
+        map.put(SftpConstants.SSH_FX_OP_UNSUPPORTED, "Unsupported operation requested");
+        map.put(SftpConstants.SSH_FX_INVALID_HANDLE, "Invalid handle value");
+        map.put(SftpConstants.SSH_FX_NO_SUCH_PATH, "No such path");
+        map.put(SftpConstants.SSH_FX_FILE_ALREADY_EXISTS, "File/Directory already exists");
+        map.put(SftpConstants.SSH_FX_WRITE_PROTECT, "File/Directory is write-protected");
+        map.put(SftpConstants.SSH_FX_NO_MEDIA, "No such meadia");
+        map.put(SftpConstants.SSH_FX_NO_SPACE_ON_FILESYSTEM, "No space left on device");
+        map.put(SftpConstants.SSH_FX_QUOTA_EXCEEDED, "Quota exceeded");
+        map.put(SftpConstants.SSH_FX_UNKNOWN_PRINCIPAL, "Unknown user/group");
+        map.put(SftpConstants.SSH_FX_LOCK_CONFLICT, "Lock conflict");
+        map.put(SftpConstants.SSH_FX_DIR_NOT_EMPTY, "Directory not empty");
+        map.put(SftpConstants.SSH_FX_NOT_A_DIRECTORY, "Accessed location is not a directory");
+        map.put(SftpConstants.SSH_FX_INVALID_FILENAME, "Invalid filename");
+        map.put(SftpConstants.SSH_FX_LINK_LOOP, "Link loop");
+        map.put(SftpConstants.SSH_FX_CANNOT_DELETE, "Cannot remove");
+        map.put(SftpConstants.SSH_FX_INVALID_PARAMETER, "Invalid parameter");
+        map.put(SftpConstants.SSH_FX_FILE_IS_A_DIRECTORY, "Accessed location is a directory");
+        map.put(SftpConstants.SSH_FX_BYTE_RANGE_LOCK_CONFLICT, "Range lock conflict");
+        map.put(SftpConstants.SSH_FX_BYTE_RANGE_LOCK_REFUSED, "Range lock refused");
+        map.put(SftpConstants.SSH_FX_DELETE_PENDING, "Delete pending");
+        map.put(SftpConstants.SSH_FX_FILE_CORRUPT, "Corrupted file/directory");
+        map.put(SftpConstants.SSH_FX_OWNER_INVALID, "Invalid file/directory owner");
+        map.put(SftpConstants.SSH_FX_GROUP_INVALID, "Invalid file/directory group");
+        map.put(SftpConstants.SSH_FX_NO_MATCHING_BYTE_RANGE_LOCK, "No matching byte range lock");
+        DEFAULT_SUBSTATUS_MESSAGE = Collections.unmodifiableMap(map);
+    }
 
     private SftpHelper() {
         throw new UnsupportedOperationException("No instance allowed");
@@ -143,7 +142,7 @@ public final class SftpHelper {
      * @param version The SFTP version being used
      * @return The indicator value - {@code null} if none retrieved
      * @see <A HREF="https://tools.ietf.org/html/draft-ietf-secsh-filexfer-13#section-9.4">SFTP v6 - section 9.4</A>
-     * @see #indicateEndOfNamesList(Buffer, int, PropertyResolver, Boolean)
+     * @see #indicateEndOfNamesList(Buffer, int, PropertyResolver, boolean)
      */
     public static Boolean getEndOfListIndicatorValue(Buffer buffer, int version) {
         return (version <  SftpConstants.SFTP_V6) || (buffer.available() < 1) ? null : buffer.getBoolean();
@@ -157,10 +156,10 @@ public final class SftpHelper {
      * @param version  The SFTP version being used
      * @param resolver The {@link PropertyResolver} to query whether to enable the feature
      * @return The actual indicator value used - {@code null} if none appended
-     * @see #indicateEndOfNamesList(Buffer, int, PropertyResolver, Boolean)
+     * @see #indicateEndOfNamesList(Buffer, int, PropertyResolver, boolean)
      */
     public static Boolean indicateEndOfNamesList(Buffer buffer, int version, PropertyResolver resolver) {
-        return indicateEndOfNamesList(buffer, version, resolver, Boolean.TRUE);
+        return indicateEndOfNamesList(buffer, version, resolver, true);
     }
 
     /**
@@ -176,8 +175,8 @@ public final class SftpHelper {
      * @see #APPEND_END_OF_LIST_INDICATOR
      * @see #DEFAULT_APPEND_END_OF_LIST_INDICATOR
      */
-    public static Boolean indicateEndOfNamesList(Buffer buffer, int version, PropertyResolver resolver, Boolean indicatorValue) {
-        if ((version < SftpConstants.SFTP_V6) || (indicatorValue == null)) {
+    public static Boolean indicateEndOfNamesList(Buffer buffer, int version, PropertyResolver resolver, boolean indicatorValue) {
+        if (version < SftpConstants.SFTP_V6) {
             return null;
         }
 
@@ -489,8 +488,6 @@ public final class SftpHelper {
     public static int resolveSubstatus(Throwable t) {
         if ((t instanceof NoSuchFileException) || (t instanceof FileNotFoundException)) {
             return SftpConstants.SSH_FX_NO_SUCH_FILE;
-        } else if (t instanceof InvalidHandleException) {
-            return SftpConstants.SSH_FX_INVALID_HANDLE;
         } else if (t instanceof FileAlreadyExistsException) {
             return SftpConstants.SSH_FX_FILE_ALREADY_EXISTS;
         } else if (t instanceof DirectoryNotEmptyException) {
@@ -639,9 +636,14 @@ public final class SftpHelper {
 
     public static NavigableMap<String, byte[]> readExtensions(Buffer buffer) {
         int count = buffer.getInt();
+        // Protect against malicious or malformed packets
+        if ((count < 0) || (count > SshConstants.SSH_REQUIRED_PAYLOAD_PACKET_LENGTH_SUPPORT)) {
+            throw new IndexOutOfBoundsException("Illogical extensions count: " + count);
+        }
+
         // NOTE
         NavigableMap<String, byte[]> extended = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
-        for (int i = 0; i < count; i++) {
+        for (int i = 1; i <= count; i++) {
             String key = buffer.getString();
             byte[] val = buffer.getBytes();
             byte[] prev = extended.put(key, val);
@@ -658,16 +660,16 @@ public final class SftpHelper {
             return buffer;
         }
 
-        extensions.forEach((key, value) -> {
-            Objects.requireNonNull(key, "No extension type");
-            Objects.requireNonNull(value, "No extension value");
+        for (Map.Entry<?, ?> ee : extensions.entrySet()) {
+            Object key = Objects.requireNonNull(ee.getKey(), "No extension type");
+            Object value = Objects.requireNonNull(ee.getValue(), "No extension value");
             buffer.putString(key.toString());
             if (value instanceof byte[]) {
                 buffer.putBytes((byte[]) value);
             } else {
                 buffer.putString(value.toString());
             }
-        });
+        }
 
         return buffer;
     }
@@ -679,11 +681,12 @@ public final class SftpHelper {
 
         // NOTE: even though extensions are probably case sensitive we do not allow duplicate name that differs only in case
         NavigableMap<String, String> map = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
-        extensions.forEach((key, value) -> {
-            ValidateUtils.checkNotNull(value, "No value for extension=%s", key);
-            String prev = map.put(key, (value instanceof byte[]) ? new String((byte[]) value, StandardCharsets.UTF_8) : value.toString());
+        for (Map.Entry<?, ?> ee : extensions.entrySet()) {
+            Object key = Objects.requireNonNull(ee.getKey(), "No extension type");
+            Object value = ValidateUtils.checkNotNull(ee.getValue(), "No value for extension=%s", key);
+            String prev = map.put(key.toString(), (value instanceof byte[]) ? new String((byte[]) value, StandardCharsets.UTF_8) : value.toString());
             ValidateUtils.checkTrue(prev == null, "Multiple values for extension=%s", key);
-        });
+        }
 
         return map;
     }
@@ -708,6 +711,11 @@ public final class SftpHelper {
     // for v6 see https://tools.ietf.org/html/draft-ietf-secsh-filexfer-13#page-21
     public static List<AclEntry> readACLs(Buffer buffer, int version) {
         int aclSize = buffer.getInt();
+        // Protect against malicious or malformed packets
+        if ((aclSize < 0) || (aclSize > (2 * SshConstants.SSH_REQUIRED_PAYLOAD_PACKET_LENGTH_SUPPORT))) {
+            throw new IndexOutOfBoundsException("Illogical ACL entries size: " + aclSize);
+        }
+
         int startPos = buffer.rpos();
         Buffer aclBuffer = new ByteArrayBuffer(buffer.array(), startPos, aclSize, true);
         List<AclEntry> acl = decodeACLs(aclBuffer, version);
@@ -723,14 +731,21 @@ public final class SftpHelper {
         }
 
         int count = buffer.getInt();
-        // NOTE: although the value is defined as UINT32 we do not expected a count greater than Integer.MAX_VALUE
+        /*
+         * NOTE: although the value is defined as UINT32 we do not expected a count greater
+         * than several hundreds + protect against malicious or corrupted packets
+         */
+        if ((count < 0) || (count > SshConstants.SSH_REQUIRED_PAYLOAD_PACKET_LENGTH_SUPPORT)) {
+            throw new IndexOutOfBoundsException("Illogical ACL entries count: " + count);
+        }
+
         ValidateUtils.checkTrue(count >= 0, "Invalid ACL entries count: %d", count);
         if (count == 0) {
             return Collections.emptyList();
         }
 
         List<AclEntry> acls = new ArrayList<>(count);
-        for (int i = 0; i < count; i++) {
+        for (int i = 1; i <= count; i++) {
             int aclType = buffer.getInt();
             int aclFlag = buffer.getInt();
             int aclMask = buffer.getInt();
@@ -744,11 +759,11 @@ public final class SftpHelper {
     public static AclEntry buildAclEntry(int aclType, int aclFlag, int aclMask, String aclWho) {
         UserPrincipal who = new DefaultGroupPrincipal(aclWho);
         return AclEntry.newBuilder()
-                .setType(ValidateUtils.checkNotNull(decodeAclEntryType(aclType), "Unknown ACL type: %d", aclType))
-                .setFlags(decodeAclFlags(aclFlag))
-                .setPermissions(decodeAclMask(aclMask))
-                .setPrincipal(who)
-                .build();
+            .setType(ValidateUtils.checkNotNull(decodeAclEntryType(aclType), "Unknown ACL type: %d", aclType))
+            .setFlags(decodeAclFlags(aclFlag))
+            .setPermissions(decodeAclMask(aclMask))
+            .setPrincipal(who)
+            .build();
     }
 
     /**

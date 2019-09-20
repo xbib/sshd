@@ -19,29 +19,27 @@
 package org.apache.sshd.common;
 
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
-import org.apache.sshd.common.agent.SshAgentFactory;
-import org.apache.sshd.common.channel.Channel;
+import org.apache.sshd.common.channel.ChannelFactory;
 import org.apache.sshd.common.channel.ChannelListenerManager;
 import org.apache.sshd.common.channel.RequestHandler;
 import org.apache.sshd.common.channel.throttle.ChannelStreamPacketWriterResolverManager;
 import org.apache.sshd.common.file.FileSystemFactory;
 import org.apache.sshd.common.forward.ForwardingFilterFactory;
 import org.apache.sshd.common.forward.PortForwardingEventListenerManager;
-import org.apache.sshd.common.forward.WrappedForwardingFilter;
+import org.apache.sshd.common.io.IoServiceEventListenerManager;
 import org.apache.sshd.common.io.IoServiceFactory;
 import org.apache.sshd.common.kex.KexFactoryManager;
 import org.apache.sshd.common.random.Random;
 import org.apache.sshd.common.session.ConnectionService;
 import org.apache.sshd.common.session.ReservedSessionMessagesManager;
+import org.apache.sshd.common.session.SessionDisconnectHandlerManager;
+import org.apache.sshd.common.session.SessionHeartbeatController;
 import org.apache.sshd.common.session.SessionListenerManager;
 import org.apache.sshd.common.session.UnknownChannelReferenceHandlerManager;
-import org.apache.sshd.common.forward.AgentForwardingFilter;
-import org.apache.sshd.common.forward.ForwardingFilter;
-import org.apache.sshd.common.forward.TcpForwardingFilter;
-import org.apache.sshd.common.forward.X11ForwardingFilter;
 
 /**
  * This interface allows retrieving all the <code>NamedFactory</code> used
@@ -53,12 +51,14 @@ public interface FactoryManager
         extends KexFactoryManager,
                 SessionListenerManager,
                 ReservedSessionMessagesManager,
+                SessionDisconnectHandlerManager,
                 ChannelListenerManager,
                 ChannelStreamPacketWriterResolverManager,
                 UnknownChannelReferenceHandlerManager,
                 PortForwardingEventListenerManager,
+                IoServiceEventListenerManager,
                 AttributeStore,
-                PropertyResolver {
+                SessionHeartbeatController {
 
     /**
      * Key used to retrieve the value of the channel window size in the
@@ -172,7 +172,7 @@ public interface FactoryManager
 
     /**
      * Key used to retrieve the value of the disconnect timeout which
-     * is used when a disconnection is attempted.  If the disconnect
+     * is used when a disconnection is attempted. If the disconnect
      * message has not been sent before the timeout, the underlying socket
      * will be forcibly closed - in milliseconds.
      * @see #DEFAULT_DISCONNECT_TIMEOUT
@@ -258,7 +258,7 @@ public interface FactoryManager
     String NIO2_READ_BUFFER_SIZE = "nio2-read-buf-size";
 
     /**
-     * The default reported version of {@link #getVersion()} if the built-in
+     * The default {@code REPORTED_VERSION} of {@link #getVersion()} if the built-in
      * version information cannot be accessed
      */
     String DEFAULT_VERSION = "SSHD-UNKNOWN";
@@ -357,6 +357,11 @@ public interface FactoryManager
     String IGNORE_MESSAGE_SIZE = "ignore-message-size";
 
     /**
+     * Value of {@value #IGNORE_MESSAGE_SIZE} if none configured
+     */
+    int DEFAULT_IGNORE_MESSAGE_SIZE = 16;
+
+    /**
      * The request type of agent forwarding. The value may be {@value #AGENT_FORWARDING_TYPE_IETF} or
      *  {@value #AGENT_FORWARDING_TYPE_OPENSSH}.
      */
@@ -371,11 +376,6 @@ public interface FactoryManager
      * The agent forwarding type defined by OpenSSH.
      */
     String AGENT_FORWARDING_TYPE_OPENSSH = "auth-agent-req@openssh.com";
-
-    /**
-     * Value of {@value #IGNORE_MESSAGE_SIZE} if none configured
-     */
-    int DEFAULT_IGNORE_MESSAGE_SIZE = 16;
 
     /**
      * An upper case string identifying the version of the software used on client or server side.
@@ -398,16 +398,9 @@ public interface FactoryManager
     /**
      * Retrieve the list of named factories for <code>Channel</code> objects.
      *
-     * @return A list of named <code>Channel</code> factories, never {@code null}
+     * @return A list of {@link ChannelFactory}-ies, never {@code null}
      */
-    List<NamedFactory<Channel>> getChannelFactories();
-
-    /**
-     * Retrieve the agent factory for creating <code>SshAgent</code> objects.
-     *
-     * @return The {@link SshAgentFactory}
-     */
-    SshAgentFactory getAgentFactory();
+    List<ChannelFactory> getChannelFactories();
 
     /**
      * Retrieve the <code>ScheduledExecutorService</code> to be used.
@@ -415,27 +408,6 @@ public interface FactoryManager
      * @return The {@link ScheduledExecutorService}, never {@code null}
      */
     ScheduledExecutorService getScheduledExecutorService();
-
-    /**
-     * Retrieve the <code>ForwardingFilter</code> to be used by the SSH server.
-     * If no filter has been configured (i.e. this method returns
-     * {@code null}), then all forwarding requests will be rejected.
-     *
-     * @return The {@link ForwardingFilter} or {@code null}
-     */
-    WrappedForwardingFilter getForwardingFilter();
-
-    default TcpForwardingFilter getTcpForwardingFilter() {
-        return getForwardingFilter();
-    }
-
-    default AgentForwardingFilter getAgentForwardingFilter() {
-        return getForwardingFilter();
-    }
-
-    default X11ForwardingFilter getX11ForwardingFilter() {
-        return getForwardingFilter();
-    }
 
     /**
      * Retrieve the forwarder factory used to support forwarding.
@@ -466,4 +438,19 @@ public interface FactoryManager
      */
     List<RequestHandler<ConnectionService>> getGlobalRequestHandlers();
 
+    @Override
+    default <T> T resolveAttribute(AttributeKey<T> key) {
+        return resolveAttribute(this, key);
+    }
+
+    /**
+     * @param <T> The generic attribute type
+     * @param manager The {@link FactoryManager} - ignored if {@code null}
+     * @param key The attribute key - never {@code null}
+     * @return Associated value - {@code null} if not found
+     */
+    static <T> T resolveAttribute(FactoryManager manager, AttributeKey<T> key) {
+        Objects.requireNonNull(key, "No key");
+        return (manager == null) ? null : manager.getAttribute(key);
+    }
 }

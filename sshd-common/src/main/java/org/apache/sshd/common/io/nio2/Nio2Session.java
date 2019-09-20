@@ -49,7 +49,7 @@ import org.apache.sshd.common.util.closeable.AbstractCloseable;
  */
 public class Nio2Session extends AbstractCloseable implements IoSession {
 
-    public static final int DEFAULT_READBUF_SIZE = 63 * 1024;
+    public static final int DEFAULT_READBUF_SIZE = 32 * 1024;
 
     private static final AtomicLong SESSION_ID_GENERATOR = new AtomicLong(100L);
 
@@ -60,19 +60,23 @@ public class Nio2Session extends AbstractCloseable implements IoSession {
     private final Map<Object, Object> attributes = new HashMap<>();
     private final SocketAddress localAddress;
     private final SocketAddress remoteAddress;
+    private final SocketAddress acceptanceAddress;
     private final FactoryManager manager;
     private final Queue<Nio2DefaultIoWriteFuture> writes = new LinkedTransferQueue<>();
     private final AtomicReference<Nio2DefaultIoWriteFuture> currentWrite = new AtomicReference<>();
 
-    public Nio2Session(Nio2Service service, FactoryManager manager, IoHandler handler, AsynchronousSocketChannel socket) throws IOException {
+    public Nio2Session(
+            Nio2Service service, FactoryManager manager, IoHandler handler, AsynchronousSocketChannel socket, SocketAddress acceptanceAddress)
+                throws IOException {
         this.service = Objects.requireNonNull(service, "No service instance");
         this.manager = Objects.requireNonNull(manager, "No factory manager");
         this.ioHandler = Objects.requireNonNull(handler, "No IoHandler");
         this.socketChannel = Objects.requireNonNull(socket, "No socket channel");
         this.localAddress = socket.getLocalAddress();
         this.remoteAddress = socket.getRemoteAddress();
+        this.acceptanceAddress = acceptanceAddress;
         if (log.isDebugEnabled()) {
-            log.debug("Creating IoSession on {} from {}", localAddress, remoteAddress);
+            log.debug("Creating IoSession on {} from {} via {}", localAddress, remoteAddress, acceptanceAddress);
         }
     }
 
@@ -83,12 +87,30 @@ public class Nio2Session extends AbstractCloseable implements IoSession {
 
     @Override
     public Object getAttribute(Object key) {
-        return attributes.get(key);
+        synchronized (attributes) {
+            return attributes.get(key);
+        }
     }
 
     @Override
     public Object setAttribute(Object key, Object value) {
-        return attributes.put(key, value);
+        synchronized (attributes) {
+            return attributes.put(key, value);
+        }
+    }
+
+    @Override
+    public Object setAttributeIfAbsent(Object key, Object value) {
+        synchronized (attributes) {
+            return attributes.putIfAbsent(key, value);
+        }
+    }
+
+    @Override
+    public Object removeAttribute(Object key) {
+        synchronized (attributes) {
+            return attributes.remove(key);
+        }
     }
 
     @Override
@@ -101,6 +123,11 @@ public class Nio2Session extends AbstractCloseable implements IoSession {
         return localAddress;
     }
 
+    @Override
+    public SocketAddress getAcceptanceAddress() {
+        return acceptanceAddress;
+    }
+
     public AsynchronousSocketChannel getSocket() {
         return socketChannel;
     }
@@ -111,21 +138,22 @@ public class Nio2Session extends AbstractCloseable implements IoSession {
 
     public void suspend() {
         AsynchronousSocketChannel socket = getSocket();
+        boolean debugEnabled = log.isDebugEnabled();
         try {
             socket.shutdownInput();
         } catch (IOException e) {
-            if (log.isDebugEnabled()) {
+            if (debugEnabled) {
                 log.debug("suspend({}) failed {{}) to shutdown input: {}",
-                          this, e.getClass().getSimpleName(), e.getMessage());
+                    this, e.getClass().getSimpleName(), e.getMessage());
             }
         }
 
         try {
             socket.shutdownOutput();
         } catch (IOException e) {
-            if (log.isDebugEnabled()) {
+            if (debugEnabled) {
                 log.debug("suspend({}) failed {{}) to shutdown output: {}",
-                          this, e.getClass().getSimpleName(), e.getMessage());
+                    this, e.getClass().getSimpleName(), e.getMessage());
             }
         }
     }
@@ -137,7 +165,8 @@ public class Nio2Session extends AbstractCloseable implements IoSession {
         }
 
         ByteBuffer buf = ByteBuffer.wrap(buffer.array(), buffer.rpos(), buffer.available());
-        Nio2DefaultIoWriteFuture future = new Nio2DefaultIoWriteFuture(getRemoteAddress(), null, buf);
+        Nio2DefaultIoWriteFuture future =
+            new Nio2DefaultIoWriteFuture(getRemoteAddress(), null, buf);
         if (isClosing()) {
             Throwable exc = new ClosedChannelException();
             future.setException(exc);
@@ -160,14 +189,14 @@ public class Nio2Session extends AbstractCloseable implements IoSession {
             try {
                 if (log.isDebugEnabled()) {
                     log.debug("exceptionCaught({}) caught {}[{}] - calling handler",
-                              this, exc.getClass().getSimpleName(), exc.getMessage());
+                        this, exc.getClass().getSimpleName(), exc.getMessage());
                 }
                 handler.exceptionCaught(this, exc);
             } catch (Throwable e) {
                 Throwable t = GenericUtils.peelException(e);
                 if (log.isDebugEnabled()) {
                     log.debug("exceptionCaught({}) Exception handler threw {}, closing the session: {}",
-                              this, t.getClass().getSimpleName(), t.getMessage());
+                        this, t.getClass().getSimpleName(), t.getMessage());
                 }
 
                 if (log.isTraceEnabled()) {
@@ -182,20 +211,24 @@ public class Nio2Session extends AbstractCloseable implements IoSession {
     @Override
     protected CloseFuture doCloseGracefully() {
         Object closeId = toString();
-        return builder().when(closeId, writes).run(closeId, () -> {
-            try {
-                AsynchronousSocketChannel socket = getSocket();
-                socket.shutdownOutput();
-            } catch (IOException e) {
-                log.info("doCloseGracefully({}) {} while shutting down output: {}",
-                         this, e.getClass().getSimpleName(), e.getMessage());
-            }
-        }).build().close(false);
+        return builder()
+            .when(closeId, writes)
+            .run(closeId, () -> {
+                try {
+                    AsynchronousSocketChannel socket = getSocket();
+                    socket.shutdownOutput();
+                } catch (IOException e) {
+                    log.info("doCloseGracefully({}) {} while shutting down output: {}",
+                        this, e.getClass().getSimpleName(), e.getMessage());
+                }
+            }).build()
+            .close(false);
     }
 
     @Override
     protected void doCloseImmediately() {
-        for (boolean debugEnabled = log.isDebugEnabled();;) {
+        boolean debugEnabled = log.isDebugEnabled();
+        while (true) {
             // Cancel pending requests informing them of the cancellation
             Nio2DefaultIoWriteFuture future = writes.poll();
             if (future != null) {
@@ -211,7 +244,8 @@ public class Nio2Session extends AbstractCloseable implements IoSession {
                     if (debugEnabled) {
                         log.debug("doCloseImmediately({}) signal write abort for future={}", this, future);
                     }
-                    future.setException(new WriteAbortedException("Write request aborted due to immediate session close", null));
+                    future.setException(
+                        new WriteAbortedException("Write request aborted due to immediate session close", null));
                 }
             } else {
                 break;
@@ -220,9 +254,22 @@ public class Nio2Session extends AbstractCloseable implements IoSession {
 
         AsynchronousSocketChannel socket = getSocket();
         try {
+            if (debugEnabled) {
+                log.debug("doCloseImmediately({}) closing socket={}", this, socket);
+            }
+
             socket.close();
+
+            if (debugEnabled) {
+                log.debug("doCloseImmediately({}) socket={} closed", this, socket);
+            }
+
         } catch (IOException e) {
-            log.info("doCloseImmediately(" + this + ") exception caught while closing socket", e);
+            log.info("doCloseImmediately({}) {} caught while closing socket={}: {}",
+                this, e.getClass().getSimpleName(), socket, e.getMessage());
+            if (debugEnabled) {
+                log.debug("doCloseImmediately(" + this + ") socket=" + socket + " close failure details", e);
+            }
         }
 
         service.sessionClosed(this);
@@ -232,20 +279,35 @@ public class Nio2Session extends AbstractCloseable implements IoSession {
         try {
             handler.sessionClosed(this);
         } catch (Throwable e) {
-            if (log.isDebugEnabled()) {
+            if (debugEnabled) {
                 log.debug("doCloseImmediately({}) {} while calling IoHandler#sessionClosed: {}",
-                          this, e.getClass().getSimpleName(), e.getMessage());
+                    this, e.getClass().getSimpleName(), e.getMessage());
             }
 
             if (log.isTraceEnabled()) {
                 log.trace("doCloseImmediately(" + this + ") IoHandler#sessionClosed failure details", e);
             }
         }
+
+        synchronized (attributes) {
+            attributes.clear();
+        }
     }
 
     @Override   // co-variant return
     public Nio2Service getService() {
         return service;
+    }
+
+    @Override
+    public void shudownOutputStream() throws IOException {
+        AsynchronousSocketChannel socket = getSocket();
+        if (socket.isOpen()) {
+            if (log.isDebugEnabled()) {
+                log.debug("shudownOutputStream({})", this);
+            }
+            socket.shutdownOutput();
+        }
     }
 
     public void startReading() {
@@ -270,11 +332,14 @@ public class Nio2Session extends AbstractCloseable implements IoSession {
 
     protected void doReadCycle(ByteBuffer buffer, Readable bufReader) {
         Nio2CompletionHandler<Integer, Object> completion =
-                Objects.requireNonNull(createReadCycleCompletionHandler(buffer, bufReader), "No completion handler created");
+            Objects.requireNonNull(
+                createReadCycleCompletionHandler(buffer, bufReader),
+                "No completion handler created");
         doReadCycle(buffer, completion);
     }
 
-    protected Nio2CompletionHandler<Integer, Object> createReadCycleCompletionHandler(ByteBuffer buffer, Readable bufReader) {
+    protected Nio2CompletionHandler<Integer, Object> createReadCycleCompletionHandler(
+            ByteBuffer buffer, Readable bufReader) {
         return new Nio2CompletionHandler<Integer, Object>() {
             @Override
             protected void onCompleted(Integer result, Object attachment) {
@@ -289,10 +354,12 @@ public class Nio2Session extends AbstractCloseable implements IoSession {
     }
 
     protected void handleReadCycleCompletion(
-            ByteBuffer buffer, Readable bufReader, Nio2CompletionHandler<Integer, Object> completionHandler, Integer result, Object attachment) {
+            ByteBuffer buffer, Readable bufReader, Nio2CompletionHandler<Integer, Object> completionHandler,
+            Integer result, Object attachment) {
         try {
+            boolean debugEnabled = log.isDebugEnabled();
             if (result >= 0) {
-                if (log.isDebugEnabled()) {
+                if (debugEnabled) {
                     log.debug("handleReadCycleCompletion({}) read {} bytes", this, result);
                 }
                 buffer.flip();
@@ -304,13 +371,14 @@ public class Nio2Session extends AbstractCloseable implements IoSession {
                     buffer.clear();
                     doReadCycle(buffer, completionHandler);
                 } else {
-                    if (log.isDebugEnabled()) {
+                    if (debugEnabled) {
                         log.debug("handleReadCycleCompletion({}) IoSession has been closed, stop reading", this);
                     }
                 }
             } else {
-                if (log.isDebugEnabled()) {
-                    log.debug("handleReadCycleCompletion({}) Socket has been disconnected (result={}), closing IoSession now", this, result);
+                if (debugEnabled) {
+                    log.debug("handleReadCycleCompletion({}) Socket has been disconnected (result={}), closing IoSession now",
+                        this, result);
                 }
                 close(true);
             }
@@ -325,7 +393,8 @@ public class Nio2Session extends AbstractCloseable implements IoSession {
 
     protected void doReadCycle(ByteBuffer buffer, Nio2CompletionHandler<Integer, Object> completion) {
         AsynchronousSocketChannel socket = getSocket();
-        long readTimeout = manager.getLongProperty(FactoryManager.NIO2_READ_TIMEOUT, FactoryManager.DEFAULT_NIO2_READ_TIMEOUT);
+        long readTimeout = manager.getLongProperty(
+            FactoryManager.NIO2_READ_TIMEOUT, FactoryManager.DEFAULT_NIO2_READ_TIMEOUT);
         socket.read(buffer, readTimeout, TimeUnit.MILLISECONDS, null, completion);
     }
 
@@ -343,8 +412,9 @@ public class Nio2Session extends AbstractCloseable implements IoSession {
             AsynchronousSocketChannel socket = getSocket();
             ByteBuffer buffer = future.getBuffer();
             Nio2CompletionHandler<Integer, Object> handler =
-                    Objects.requireNonNull(createWriteCycleCompletionHandler(future, socket, buffer),
-                                               "No write cycle completion handler created");
+                Objects.requireNonNull(
+                    createWriteCycleCompletionHandler(future, socket, buffer),
+                    "No write cycle completion handler created");
             doWriteCycle(buffer, handler);
         } catch (Throwable e) {
             future.setWritten();
@@ -359,7 +429,8 @@ public class Nio2Session extends AbstractCloseable implements IoSession {
 
     protected void doWriteCycle(ByteBuffer buffer, Nio2CompletionHandler<Integer, Object> completion) {
         AsynchronousSocketChannel socket = getSocket();
-        long writeTimeout = manager.getLongProperty(FactoryManager.NIO2_MIN_WRITE_TIMEOUT, FactoryManager.DEFAULT_NIO2_MIN_WRITE_TIMEOUT);
+        long writeTimeout = manager.getLongProperty(
+            FactoryManager.NIO2_MIN_WRITE_TIMEOUT, FactoryManager.DEFAULT_NIO2_MIN_WRITE_TIMEOUT);
         socket.write(buffer, writeTimeout, TimeUnit.MILLISECONDS, null, completion);
     }
 
@@ -411,9 +482,11 @@ public class Nio2Session extends AbstractCloseable implements IoSession {
             ByteBuffer buffer, int writeLen, Throwable exc, Object attachment) {
         if (log.isDebugEnabled()) {
             log.debug("handleWriteCycleFailure({}) failed ({}) to write {} bytes: {}",
-                      this, exc.getClass().getSimpleName(), writeLen, exc.getMessage());
+                this, exc.getClass().getSimpleName(), writeLen, exc.getMessage());
         }
-        if (log.isTraceEnabled()) {
+
+        boolean traceEnabled = log.isTraceEnabled();
+        if (traceEnabled) {
             log.trace("handleWriteCycleFailure(" + this + ") len=" + writeLen + " failure details", exc);
         }
         future.setException(exc);
@@ -423,9 +496,9 @@ public class Nio2Session extends AbstractCloseable implements IoSession {
         try {
             finishWrite(future);
         } catch (RuntimeException e) {
-            if (log.isTraceEnabled()) {
+            if (traceEnabled) {
                 log.trace("handleWriteCycleFailure({}) failed ({}) to finish writing: {}",
-                        this, e.getClass().getSimpleName(), e.getMessage());
+                    this, e.getClass().getSimpleName(), e.getMessage());
             }
         }
     }
@@ -438,6 +511,9 @@ public class Nio2Session extends AbstractCloseable implements IoSession {
 
     @Override
     public String toString() {
-        return getClass().getSimpleName() + "[local=" + getLocalAddress() + ", remote=" + getRemoteAddress() + "]";
+        return getClass().getSimpleName()
+            + "[local=" + getLocalAddress()
+            + ", remote=" + getRemoteAddress()
+            + "]";
     }
 }

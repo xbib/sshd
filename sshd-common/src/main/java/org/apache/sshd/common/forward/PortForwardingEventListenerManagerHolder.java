@@ -19,6 +19,7 @@
 
 package org.apache.sshd.common.forward;
 
+import org.apache.sshd.common.forward.PortForwardingEventListenerManager;
 import java.util.Collection;
 
 /**

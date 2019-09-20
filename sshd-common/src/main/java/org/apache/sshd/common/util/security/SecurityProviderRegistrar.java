@@ -80,11 +80,11 @@ public interface SecurityProviderRegistrar extends SecurityProviderChoice, Optio
      * All the entities that are used in calls to {@link #isSecurityEntitySupported(Class, String)}
      */
     List<Class<?>> SECURITY_ENTITIES =
-            Collections.unmodifiableList(
-                    Arrays.asList(
-                            Cipher.class, KeyFactory.class, MessageDigest.class,
-                            KeyPairGenerator.class, KeyAgreement.class, Mac.class,
-                            Signature.class, CertificateFactory.class));
+        Collections.unmodifiableList(
+            Arrays.asList(
+                Cipher.class, KeyFactory.class, MessageDigest.class,
+                KeyPairGenerator.class, KeyAgreement.class, Mac.class,
+                Signature.class, CertificateFactory.class));
 
     default String getBasePropertyName() {
         return CONFIG_PROP_BASE + "." + getName();
@@ -106,12 +106,13 @@ public interface SecurityProviderRegistrar extends SecurityProviderChoice, Optio
             return false;
         }
 
-        return this.getBooleanProperty(getConfigurationPropertyName(ENABLED_PROPERTY), true);
+        String configPropName = getConfigurationPropertyName(ENABLED_PROPERTY);
+        return this.getBooleanProperty(configPropName, true);
     }
 
     @Override
     default PropertyResolver getParentPropertyResolver() {
-        return SyspropsMapWrapper.SYSPROPS_RESOLVER;
+        return SyspropsMapWrapper.RAW_PROPS_RESOLVER;
     }
 
     @Override

@@ -29,10 +29,10 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.Enumeration;
+import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.NavigableSet;
 import java.util.Objects;
-import java.util.TreeSet;
+import java.util.Set;
 
 import org.apache.sshd.common.util.GenericUtils;
 import org.apache.sshd.common.util.NumberUtils;
@@ -62,16 +62,10 @@ public class SshdSocketAddress extends SocketAddress {
     public static final String LOCALHOST_IPV4 = "127.0.0.1";
     public static final String IPV4_ANYADDR = "0.0.0.0";
 
-    public static final NavigableSet<String> WELL_KNOWN_IPV4_ADDRESSES =
-        Collections.unmodifiableNavigableSet(
-            new TreeSet<String>(String.CASE_INSENSITIVE_ORDER) {
-                // Not serializing it
-                private static final long serialVersionUID = 1L;
-
-                {
-                    addAll(Arrays.asList(LOCALHOST_IPV4, IPV4_ANYADDR));
-                }
-        });
+    public static final Set<String> WELL_KNOWN_IPV4_ADDRESSES =
+        Collections.unmodifiableSet(
+            new LinkedHashSet<>(
+                Arrays.asList(LOCALHOST_IPV4, IPV4_ANYADDR)));
 
     // 10.0.0.0 - 10.255.255.255
     public static final String PRIVATE_CLASS_A_PREFIX = "10.";
@@ -96,18 +90,12 @@ public class SshdSocketAddress extends SocketAddress {
     public static final String IPV6_LONG_LOCALHOST = "0:0:0:0:0:0:0:1";
     public static final String IPV6_SHORT_LOCALHOST = "::1";
 
-    public static final NavigableSet<String> WELL_KNOWN_IPV6_ADDRESSES =
-        Collections.unmodifiableNavigableSet(
-            new TreeSet<String>(String.CASE_INSENSITIVE_ORDER) {
-                // Not serializing it
-                private static final long serialVersionUID = 1L;
-
-                {
-                    addAll(Arrays.asList(
-                        IPV6_LONG_LOCALHOST, IPV6_SHORT_LOCALHOST,
-                        IPV6_LONG_ANY_ADDRESS, IPV6_SHORT_ANY_ADDRESS));
-                }
-        });
+    public static final Set<String> WELL_KNOWN_IPV6_ADDRESSES =
+        Collections.unmodifiableSet(
+            new LinkedHashSet<>(
+                Arrays.asList(
+                    IPV6_LONG_LOCALHOST, IPV6_SHORT_LOCALHOST,
+                    IPV6_LONG_ANY_ADDRESS, IPV6_SHORT_ANY_ADDRESS)));
 
     /**
      * A dummy placeholder that can be used instead of {@code null}s
@@ -160,6 +148,15 @@ public class SshdSocketAddress extends SocketAddress {
         this(IPV4_ANYADDR, port);
     }
 
+    public SshdSocketAddress(InetSocketAddress addr) {
+        Objects.requireNonNull(addr, "No address provided");
+
+        String host = addr.getHostString();
+        hostName = GenericUtils.isEmpty(host) ? IPV4_ANYADDR : host;
+        port = addr.getPort();
+        ValidateUtils.checkTrue(port >= 0, "Port must be >= 0: %d", port);
+    }
+
     public SshdSocketAddress(String hostName, int port) {
         Objects.requireNonNull(hostName, "Host name may not be null");
         this.hostName = GenericUtils.isEmpty(hostName) ? IPV4_ANYADDR : hostName;
@@ -192,7 +189,7 @@ public class SshdSocketAddress extends SocketAddress {
             return true;
         } else {
             return (this.getPort() == that.getPort())
-                && Objects.equals(this.getHostName(), that.getHostName());
+                && (GenericUtils.safeCompare(this.getHostName(), that.getHostName(), false) == 0);
         }
     }
 
@@ -209,9 +206,8 @@ public class SshdSocketAddress extends SocketAddress {
 
     @Override
     public int hashCode() {
-        return Objects.hashCode(getHostName()) + getPort();
+        return GenericUtils.hashCode(getHostName(), Boolean.FALSE) + getPort();
     }
-
 
     /**
      * Returns the first external network address assigned to this
@@ -261,7 +257,7 @@ public class SshdSocketAddress extends SocketAddress {
      * @param addr The {@link InetAddress} to be verified
      * @return <P><code>true</code> if the address is:</P>
      * <UL>
-     *         <LI>Not <code>null</code></LI>
+     *         <LI>Not {@code null}</LI>
      *         <LI>An {@link Inet4Address}</LI>
      *         <LI>Not link local</LI>
      *         <LI>Not a multicast</LI>

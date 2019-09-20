@@ -25,16 +25,21 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.NavigableMap;
 import java.util.Objects;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
+import org.apache.sshd.common.NamedResource;
 import org.apache.sshd.common.subsystem.sftp.extensions.Supported2Parser.Supported2;
 import org.apache.sshd.common.subsystem.sftp.extensions.SupportedParser.Supported;
 import org.apache.sshd.common.subsystem.sftp.extensions.openssh.FstatVfsExtensionParser;
 import org.apache.sshd.common.subsystem.sftp.extensions.openssh.FsyncExtensionParser;
 import org.apache.sshd.common.subsystem.sftp.extensions.openssh.HardLinkExtensionParser;
+import org.apache.sshd.common.subsystem.sftp.extensions.openssh.LSetStatExtensionParser;
 import org.apache.sshd.common.subsystem.sftp.extensions.openssh.PosixRenameExtensionParser;
 import org.apache.sshd.common.subsystem.sftp.extensions.openssh.StatVfsExtensionParser;
 import org.apache.sshd.common.util.GenericUtils;
@@ -45,30 +50,29 @@ import org.apache.sshd.common.util.GenericUtils;
  */
 public final class ParserUtils {
     public static final Collection<ExtensionParser<?>> BUILT_IN_PARSERS =
-            Collections.unmodifiableList(
-                    Arrays.<ExtensionParser<?>>asList(
-                            VendorIdParser.INSTANCE,
-                            NewlineParser.INSTANCE,
-                            VersionsParser.INSTANCE,
-                            SupportedParser.INSTANCE,
-                            Supported2Parser.INSTANCE,
-                            AclSupportedParser.INSTANCE,
-                            // OpenSSH extensions
-                            PosixRenameExtensionParser.INSTANCE,
-                            StatVfsExtensionParser.INSTANCE,
-                            FstatVfsExtensionParser.INSTANCE,
-                            HardLinkExtensionParser.INSTANCE,
-                            FsyncExtensionParser.INSTANCE
-                    ));
+        Collections.unmodifiableList(
+            Arrays.<ExtensionParser<?>>asList(
+                VendorIdParser.INSTANCE,
+                NewlineParser.INSTANCE,
+                VersionsParser.INSTANCE,
+                SupportedParser.INSTANCE,
+                Supported2Parser.INSTANCE,
+                AclSupportedParser.INSTANCE,
+                // OpenSSH extensions
+                PosixRenameExtensionParser.INSTANCE,
+                StatVfsExtensionParser.INSTANCE,
+                FstatVfsExtensionParser.INSTANCE,
+                HardLinkExtensionParser.INSTANCE,
+                FsyncExtensionParser.INSTANCE,
+                LSetStatExtensionParser.INSTANCE
+            ));
 
-    private static final Map<String, ExtensionParser<?>> PARSERS_MAP;
-
-    static {
-        PARSERS_MAP = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
-        for (ExtensionParser<?> p : BUILT_IN_PARSERS) {
-            PARSERS_MAP.put(p.getName(), p);
-        }
-    }
+    private static final NavigableMap<String, ExtensionParser<?>> PARSERS_MAP =
+        Collections.unmodifiableNavigableMap(
+            BUILT_IN_PARSERS.stream()
+                .collect(Collectors.toMap(
+                    NamedResource::getName, Function.identity(),
+                    GenericUtils.throwingMerger(), () -> new TreeMap<>(String.CASE_INSENSITIVE_ORDER))));
 
     private ParserUtils() {
         throw new UnsupportedOperationException("No instance");

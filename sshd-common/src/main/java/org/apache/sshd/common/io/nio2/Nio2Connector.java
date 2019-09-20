@@ -23,11 +23,13 @@ import java.net.SocketAddress;
 import java.nio.channels.AsynchronousChannelGroup;
 import java.nio.channels.AsynchronousSocketChannel;
 
+import org.apache.sshd.common.AttributeRepository;
 import org.apache.sshd.common.FactoryManager;
 import org.apache.sshd.common.future.DefaultSshFuture;
 import org.apache.sshd.common.io.IoConnectFuture;
 import org.apache.sshd.common.io.IoConnector;
 import org.apache.sshd.common.io.IoHandler;
+import org.apache.sshd.common.io.IoServiceEventListener;
 import org.apache.sshd.common.io.IoSession;
 import org.apache.sshd.common.util.GenericUtils;
 import org.apache.sshd.common.util.ValidateUtils;
@@ -43,8 +45,10 @@ public class Nio2Connector extends Nio2Service implements IoConnector {
     }
 
     @Override
-    public IoConnectFuture connect(SocketAddress address) {
-        if (log.isDebugEnabled()) {
+    public IoConnectFuture connect(
+            SocketAddress address, AttributeRepository context, SocketAddress localAddress) {
+        boolean debugEnabled = log.isDebugEnabled();
+        if (debugEnabled) {
             log.debug("Connecting to {}", address);
         }
 
@@ -55,16 +59,21 @@ public class Nio2Connector extends Nio2Service implements IoConnector {
             AsynchronousChannelGroup group = getChannelGroup();
             channel = openAsynchronousSocketChannel(address, group);
             socket = setSocketOptions(channel);
+            if (localAddress != null) {
+                socket.bind(localAddress);
+            }
             Nio2CompletionHandler<Void, Object> completionHandler =
-                    ValidateUtils.checkNotNull(createConnectionCompletionHandler(future, socket, getFactoryManager(), getIoHandler()),
-                                               "No connection completion handler created for %s",
-                                               address);
+                ValidateUtils.checkNotNull(
+                    createConnectionCompletionHandler(
+                        future, socket, context, getFactoryManager(), getIoHandler()),
+                    "No connection completion handler created for %s",
+                    address);
             socket.connect(address, null, completionHandler);
         } catch (Throwable exc) {
             Throwable t = GenericUtils.peelException(exc);
-            if (log.isDebugEnabled()) {
+            if (debugEnabled) {
                 log.debug("connect({}) failed ({}) to schedule connection: {}",
-                          address, t.getClass().getSimpleName(), t.getMessage());
+                    address, t.getClass().getSimpleName(), t.getMessage());
             }
             if (log.isTraceEnabled()) {
                 log.trace("connect(" + address + ") connection failure details", t);
@@ -75,9 +84,9 @@ public class Nio2Connector extends Nio2Service implements IoConnector {
                     socket.close();
                 }
             } catch (IOException err) {
-                if (log.isDebugEnabled()) {
+                if (debugEnabled) {
                     log.debug("connect({}) - failed ({}) to close socket: {}",
-                            address, err.getClass().getSimpleName(), err.getMessage());
+                        address, err.getClass().getSimpleName(), err.getMessage());
                 }
             }
 
@@ -86,9 +95,9 @@ public class Nio2Connector extends Nio2Service implements IoConnector {
                     channel.close();
                 }
             } catch (IOException err) {
-                if (log.isDebugEnabled()) {
+                if (debugEnabled) {
                     log.debug("connect({}) - failed ({}) to close channel: {}",
-                            address, err.getClass().getSimpleName(), err.getMessage());
+                        address, err.getClass().getSimpleName(), err.getMessage());
                 }
             }
 
@@ -105,59 +114,106 @@ public class Nio2Connector extends Nio2Service implements IoConnector {
     }
 
     protected Nio2CompletionHandler<Void, Object> createConnectionCompletionHandler(
-            IoConnectFuture future, AsynchronousSocketChannel socket, FactoryManager manager, IoHandler handler) {
-        return new Nio2CompletionHandler<Void, Object>() {
-            @Override
-            @SuppressWarnings("synthetic-access")
-            protected void onCompleted(Void result, Object attachment) {
-                Long sessionId = null;
-                try {
-                    Nio2Session session = createSession(manager, handler, socket);
-                    handler.sessionCreated(session);
-                    sessionId = session.getId();
-                    sessions.put(sessionId, session);
-                    future.setSession(session);
-                    if (session.isClosing()) {
-                        try {
-                            handler.sessionClosed(session);
-                        } finally {
-                            unmapSession(sessionId);
-                        }
-                    } else {
-                        session.startReading();
-                    }
-                } catch (Throwable exc) {
-                    Throwable t = GenericUtils.peelException(exc);
-                    if (log.isDebugEnabled()) {
-                        log.debug("onCompleted - failed {} to start session: {}",
-                                  t.getClass().getSimpleName(), t.getMessage());
-                    }
-                    if (log.isTraceEnabled()) {
-                        log.trace("onCompleted - session creation failure details", t);
-                    }
-
-                    try {
-                        socket.close();
-                    } catch (IOException err) {
-                        if (log.isDebugEnabled()) {
-                            log.debug("onCompleted - failed {} to close socket: {}", err.getClass().getSimpleName(), err.getMessage());
-                        }
-                    }
-
-                    future.setException(t);
-                    unmapSession(sessionId);
-                }
-            }
-
-            @Override
-            protected void onFailed(Throwable exc, Object attachment) {
-                future.setException(exc);
-            }
-        };
+            IoConnectFuture future, AsynchronousSocketChannel socket,
+            AttributeRepository context, FactoryManager manager, IoHandler handler) {
+        return new ConnectionCompletionHandler(future, socket, context, manager, handler);
     }
 
-    protected Nio2Session createSession(FactoryManager manager, IoHandler handler, AsynchronousSocketChannel socket) throws Throwable {
-        return new Nio2Session(this, manager, handler, socket);
+    protected class ConnectionCompletionHandler extends Nio2CompletionHandler<Void, Object> {
+        protected final IoConnectFuture future;
+        protected final AsynchronousSocketChannel socket;
+        protected final AttributeRepository context;
+        protected final FactoryManager manager;
+        protected final IoHandler handler;
+
+        protected ConnectionCompletionHandler(
+                IoConnectFuture future, AsynchronousSocketChannel socket,
+                AttributeRepository context, FactoryManager manager, IoHandler handler) {
+            this.future = future;
+            this.socket = socket;
+            this.context = context;
+            this.manager = manager;
+            this.handler = handler;
+        }
+
+        @Override
+        @SuppressWarnings("synthetic-access")
+        protected void onCompleted(Void result, Object attachment) {
+            Long sessionId = null;
+            IoServiceEventListener listener = getIoServiceEventListener();
+            try {
+                if (listener != null) {
+                    SocketAddress local = socket.getLocalAddress();
+                    SocketAddress remote = socket.getRemoteAddress();
+                    listener.connectionEstablished(Nio2Connector.this, local, context, remote);
+                }
+
+                Nio2Session session = createSession(manager, handler, socket);
+                if (context != null) {
+                    session.setAttribute(AttributeRepository.class, context);
+                }
+
+                handler.sessionCreated(session);
+                sessionId = session.getId();
+                sessions.put(sessionId, session);
+                future.setSession(session);
+                if (session.isClosing()) {
+                    try {
+                        handler.sessionClosed(session);
+                    } finally {
+                        unmapSession(sessionId);
+                    }
+                } else {
+                    session.startReading();
+                }
+            } catch (Throwable exc) {
+                Throwable t = GenericUtils.peelException(exc);
+                boolean debugEnabled = log.isDebugEnabled();
+                if (listener != null) {
+                    try {
+                        SocketAddress localAddress = socket.getLocalAddress();
+                        SocketAddress remoteAddress = socket.getRemoteAddress();
+                        listener.abortEstablishedConnection(
+                            Nio2Connector.this, localAddress, context, remoteAddress, t);
+                    } catch (Exception e) {
+                        if (debugEnabled) {
+                            log.debug("onCompleted() listener=" + listener + " ignoring abort event exception", e);
+                        }
+                    }
+                }
+
+                if (debugEnabled) {
+                    log.debug("onCompleted - failed {} to start session: {}",
+                        t.getClass().getSimpleName(), t.getMessage());
+                }
+                if (log.isTraceEnabled()) {
+                    log.trace("onCompleted - session creation failure details", t);
+                }
+
+                try {
+                    socket.close();
+                } catch (IOException err) {
+                    if (debugEnabled) {
+                        log.debug("onCompleted - failed {} to close socket: {}",
+                            err.getClass().getSimpleName(), err.getMessage());
+                    }
+                }
+
+                future.setException(t);
+                unmapSession(sessionId);
+            }
+        }
+
+        @Override
+        protected void onFailed(Throwable exc, Object attachment) {
+            future.setException(exc);
+        }
+    }
+
+    protected Nio2Session createSession(
+            FactoryManager manager, IoHandler handler, AsynchronousSocketChannel socket)
+                throws Throwable {
+        return new Nio2Session(this, manager, handler, socket, null);
     }
 
     public static class DefaultIoConnectFuture extends DefaultSshFuture<IoConnectFuture> implements IoConnectFuture {

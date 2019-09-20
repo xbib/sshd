@@ -23,7 +23,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
-import org.apache.sshd.common.channel.Channel;
+import org.apache.sshd.common.channel.ChannelFactory;
 import org.apache.sshd.common.channel.RequestHandler;
 import org.apache.sshd.common.channel.throttle.ChannelStreamPacketWriterResolver;
 import org.apache.sshd.common.cipher.BuiltinCiphers;
@@ -31,7 +31,6 @@ import org.apache.sshd.common.cipher.Cipher;
 import org.apache.sshd.common.compression.Compression;
 import org.apache.sshd.common.file.FileSystemFactory;
 import org.apache.sshd.common.file.nativefs.NativeFileSystemFactory;
-import org.apache.sshd.common.forward.DefaultForwarderFactory;
 import org.apache.sshd.common.forward.ForwardingFilterFactory;
 import org.apache.sshd.common.helpers.AbstractFactoryManager;
 import org.apache.sshd.common.kex.BuiltinDHFactories;
@@ -43,12 +42,9 @@ import org.apache.sshd.common.random.SingletonRandomFactory;
 import org.apache.sshd.common.session.ConnectionService;
 import org.apache.sshd.common.session.UnknownChannelReferenceHandler;
 import org.apache.sshd.common.session.helpers.DefaultUnknownChannelReferenceHandler;
-import org.apache.sshd.common.signature.BuiltinSignatures;
 import org.apache.sshd.common.signature.Signature;
 import org.apache.sshd.common.util.ObjectBuilder;
 import org.apache.sshd.common.util.security.SecurityUtils;
-import org.apache.sshd.common.forward.WrappedForwardingFilter;
-import org.apache.sshd.common.forward.RejectAllForwardingFilter;
 
 /**
  * Base class for dedicated client/server instance builders
@@ -60,29 +56,28 @@ import org.apache.sshd.common.forward.RejectAllForwardingFilter;
 public class BaseBuilder<T extends AbstractFactoryManager, S extends BaseBuilder<T, S>> implements ObjectBuilder<T> {
     public static final FileSystemFactory DEFAULT_FILE_SYSTEM_FACTORY = NativeFileSystemFactory.INSTANCE;
 
-    public static final WrappedForwardingFilter DEFAULT_FORWARDING_FILTER = RejectAllForwardingFilter.INSTANCE;
-
-    public static final ForwardingFilterFactory DEFAULT_FORWARDER_FACTORY = DefaultForwarderFactory.INSTANCE;
+    //public static final ForwardingFilterFactory DEFAULT_FORWARDER_FACTORY = DefaultForwarderFactory.INSTANCE;
 
     /**
      * The default {@link BuiltinCiphers} setup in order of preference
      * as specified by <A HREF="https://www.freebsd.org/cgi/man.cgi?query=ssh_config&sektion=5">ssh_config(5)</A>
      */
     public static final List<BuiltinCiphers> DEFAULT_CIPHERS_PREFERENCE =
-        Collections.unmodifiableList(Arrays.asList(
-            BuiltinCiphers.aes128ctr,
-            BuiltinCiphers.aes192ctr,
-            BuiltinCiphers.aes256ctr,
-            BuiltinCiphers.arcfour256,
-            BuiltinCiphers.arcfour128,
-            BuiltinCiphers.aes128cbc,
-            BuiltinCiphers.tripledescbc,
-            BuiltinCiphers.blowfishcbc,
-            // TODO add support for cast128-cbc cipher
-            BuiltinCiphers.aes192cbc,
-            BuiltinCiphers.aes256cbc
-            // TODO add support for arcfour cipher
-        ));
+        Collections.unmodifiableList(
+            Arrays.asList(
+                BuiltinCiphers.aes128ctr,
+                BuiltinCiphers.aes192ctr,
+                BuiltinCiphers.aes256ctr,
+                BuiltinCiphers.arcfour256,
+                BuiltinCiphers.arcfour128,
+                BuiltinCiphers.aes128cbc,
+                BuiltinCiphers.tripledescbc,
+                BuiltinCiphers.blowfishcbc,
+                // TODO add support for cast128-cbc cipher
+                BuiltinCiphers.aes192cbc,
+                BuiltinCiphers.aes256cbc
+                // TODO add support for arcfour cipher
+            ));
 
     /**
      * The default {@link BuiltinDHFactories} setup in order of preference
@@ -90,17 +85,23 @@ public class BaseBuilder<T extends AbstractFactoryManager, S extends BaseBuilder
      * ssh_config(5)</A>
      */
     public static final List<BuiltinDHFactories> DEFAULT_KEX_PREFERENCE =
-        Collections.unmodifiableList(Arrays.asList(
-            BuiltinDHFactories.ecdhp521,
-            BuiltinDHFactories.ecdhp384,
-            BuiltinDHFactories.ecdhp256,
+        Collections.unmodifiableList(
+            Arrays.asList(
+                BuiltinDHFactories.ecdhp521,
+                BuiltinDHFactories.ecdhp384,
+                BuiltinDHFactories.ecdhp256,
 
-            BuiltinDHFactories.dhgex256,
-            BuiltinDHFactories.dhgex,
+                BuiltinDHFactories.dhgex256,
+                BuiltinDHFactories.dhgex,
 
-            BuiltinDHFactories.dhg14,
-            BuiltinDHFactories.dhg1
-        ));
+                BuiltinDHFactories.dhg18_512,
+                BuiltinDHFactories.dhg17_512,
+                BuiltinDHFactories.dhg16_512,
+                BuiltinDHFactories.dhg15_512,
+                BuiltinDHFactories.dhg14_256,
+                BuiltinDHFactories.dhg14,
+                BuiltinDHFactories.dhg1
+            ));
 
     /**
      * The default {@link BuiltinMacs} setup in order of preference
@@ -108,29 +109,15 @@ public class BaseBuilder<T extends AbstractFactoryManager, S extends BaseBuilder
      * ssh_config(5)</A>
      */
     public static final List<BuiltinMacs> DEFAULT_MAC_PREFERENCE =
-        Collections.unmodifiableList(Arrays.asList(
-            BuiltinMacs.hmacmd5,
-            BuiltinMacs.hmacsha1,
-            BuiltinMacs.hmacsha256,
-            BuiltinMacs.hmacsha512,
-            BuiltinMacs.hmacsha196,
-            BuiltinMacs.hmacmd596
-        ));
-
-    /**
-     * Preferred {@link BuiltinSignatures} according to
-     * <A HREF="https://www.freebsd.org/cgi/man.cgi?query=ssh_config&sektion=5">sshd_config(5)</A>
-     * {@code HostKeyAlgorithms} recommendation
-     */
-    public static final List<BuiltinSignatures> DEFAULT_SIGNATURE_PREFERENCE =
-        Collections.unmodifiableList(Arrays.asList(
-            BuiltinSignatures.nistp256,
-            BuiltinSignatures.nistp384,
-            BuiltinSignatures.nistp521,
-            BuiltinSignatures.ed25519,
-            BuiltinSignatures.rsa,
-            BuiltinSignatures.dsa
-        ));
+        Collections.unmodifiableList(
+            Arrays.asList(
+                BuiltinMacs.hmacmd5,
+                BuiltinMacs.hmacsha1,
+                BuiltinMacs.hmacsha256,
+                BuiltinMacs.hmacsha512,
+                BuiltinMacs.hmacsha196,
+                BuiltinMacs.hmacmd596
+            ));
 
     public static final UnknownChannelReferenceHandler DEFAULT_UNKNOWN_CHANNEL_REFERENCE_HANDLER =
             DefaultUnknownChannelReferenceHandler.INSTANCE;
@@ -142,11 +129,10 @@ public class BaseBuilder<T extends AbstractFactoryManager, S extends BaseBuilder
     protected List<NamedFactory<Mac>> macFactories;
     protected List<NamedFactory<Signature>> signatureFactories;
     protected Factory<Random> randomFactory;
-    protected List<NamedFactory<Channel>> channelFactories;
+    protected List<ChannelFactory> channelFactories;
     protected FileSystemFactory fileSystemFactory;
     protected ForwardingFilterFactory forwarderFactory;
     protected List<RequestHandler<ConnectionService>> globalRequestHandlers;
-    protected WrappedForwardingFilter forwardingFilter;
     protected ChannelStreamPacketWriterResolver channelStreamPacketWriterResolver;
     protected UnknownChannelReferenceHandler unknownChannelReferenceHandler;
 
@@ -155,10 +141,6 @@ public class BaseBuilder<T extends AbstractFactoryManager, S extends BaseBuilder
     }
 
     protected S fillWithDefaultValues() {
-        if (signatureFactories == null) {
-            signatureFactories = setUpDefaultSignatures(false);
-        }
-
         if (randomFactory == null) {
             randomFactory = new SingletonRandomFactory(SecurityUtils.getRandomFactory());
         }
@@ -173,14 +155,6 @@ public class BaseBuilder<T extends AbstractFactoryManager, S extends BaseBuilder
 
         if (fileSystemFactory == null) {
             fileSystemFactory = DEFAULT_FILE_SYSTEM_FACTORY;
-        }
-
-        if (forwardingFilter == null) {
-            forwardingFilter = DEFAULT_FORWARDING_FILTER;
-        }
-
-        if (forwarderFactory == null) {
-            forwarderFactory = DEFAULT_FORWARDER_FACTORY;
         }
 
         if (unknownChannelReferenceHandler == null) {
@@ -220,18 +194,13 @@ public class BaseBuilder<T extends AbstractFactoryManager, S extends BaseBuilder
         return me();
     }
 
-    public S channelFactories(List<NamedFactory<Channel>> channelFactories) {
+    public S channelFactories(List<ChannelFactory> channelFactories) {
         this.channelFactories = channelFactories;
         return me();
     }
 
     public S fileSystemFactory(FileSystemFactory fileSystemFactory) {
         this.fileSystemFactory = fileSystemFactory;
-        return me();
-    }
-
-    public S forwardingFilter(WrappedForwardingFilter filter) {
-        this.forwardingFilter = filter;
         return me();
     }
 
@@ -275,7 +244,6 @@ public class BaseBuilder<T extends AbstractFactoryManager, S extends BaseBuilder
         ssh.setMacFactories(macFactories);
         ssh.setChannelFactories(channelFactories);
         ssh.setFileSystemFactory(fileSystemFactory);
-        ssh.setForwardingFilter(forwardingFilter);
         ssh.setForwarderFactory(forwarderFactory);
         ssh.setGlobalRequestHandlers(globalRequestHandlers);
         ssh.setChannelStreamPacketWriterResolver(channelStreamPacketWriterResolver);
@@ -302,7 +270,7 @@ public class BaseBuilder<T extends AbstractFactoryManager, S extends BaseBuilder
      * instances of the {@link Cipher}s according to the preference
      * order defined by {@link #DEFAULT_CIPHERS_PREFERENCE}.
      * <B>Note:</B> the list may be filtered to exclude unsupported JCE
-     * ciphers according to the {@code ignoreUnsupported} parameter
+     * ciphers according to the ignoreUnsupported parameter
      * @see BuiltinCiphers#isSupported()
      */
     public static List<NamedFactory<Cipher>> setUpDefaultCiphers(boolean ignoreUnsupported) {
@@ -317,25 +285,10 @@ public class BaseBuilder<T extends AbstractFactoryManager, S extends BaseBuilder
      * instances of the {@link Mac}s according to the preference
      * order defined by {@link #DEFAULT_MAC_PREFERENCE}.
      * <B>Note:</B> the list may be filtered to exclude unsupported JCE
-     * MACs according to the {@code ignoreUnsupported} parameter
+     * MACs according to the ignoreUnsupported parameter
      * @see BuiltinMacs#isSupported()
      */
     public static List<NamedFactory<Mac>> setUpDefaultMacs(boolean ignoreUnsupported) {
         return NamedFactory.setUpBuiltinFactories(ignoreUnsupported, DEFAULT_MAC_PREFERENCE);
-    }
-
-    /**
-     * @param ignoreUnsupported If {@code true} all the available built-in
-     *                          {@link Signature} factories are added, otherwise only those that are supported
-     *                          by the current JDK setup
-     * @return A {@link List} of the default {@link NamedFactory}
-     * instances of the {@link Signature}s according to the preference
-     * order defined by {@link #DEFAULT_SIGNATURE_PREFERENCE}.
-     * <B>Note:</B> the list may be filtered to exclude unsupported JCE
-     * signatures according to the {@code ignoreUnsupported} parameter
-     * @see BuiltinSignatures#isSupported()
-     */
-    public static List<NamedFactory<Signature>> setUpDefaultSignatures(boolean ignoreUnsupported) {
-        return NamedFactory.setUpBuiltinFactories(ignoreUnsupported, DEFAULT_SIGNATURE_PREFERENCE);
     }
 }

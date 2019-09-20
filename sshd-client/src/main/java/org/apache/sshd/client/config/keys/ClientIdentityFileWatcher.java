@@ -27,13 +27,14 @@ import java.security.PublicKey;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.Supplier;
 
 import org.apache.sshd.common.config.keys.FilePasswordProvider;
+import org.apache.sshd.common.config.keys.FilePasswordProviderHolder;
 import org.apache.sshd.common.config.keys.KeyUtils;
-import org.apache.sshd.common.util.GenericUtils;
+import org.apache.sshd.common.session.SessionContext;
 import org.apache.sshd.common.util.io.IoUtils;
 import org.apache.sshd.common.util.io.ModifiableFileWatcher;
+import org.apache.sshd.common.util.io.resource.PathResource;
 
 /**
  * A {@link ClientIdentityProvider} that watches a given key file re-loading
@@ -41,10 +42,12 @@ import org.apache.sshd.common.util.io.ModifiableFileWatcher;
  *
  * @author <a href="mailto:dev@mina.apache.org">Apache MINA SSHD Project</a>
  */
-public class ClientIdentityFileWatcher extends ModifiableFileWatcher implements ClientIdentityProvider {
-    private final AtomicReference<KeyPair> identityHolder = new AtomicReference<>(null);
-    private final Supplier<ClientIdentityLoader> loaderHolder;
-    private final Supplier<FilePasswordProvider> providerHolder;
+public class ClientIdentityFileWatcher
+        extends ModifiableFileWatcher
+        implements ClientIdentityProvider, ClientIdentityLoaderHolder, FilePasswordProviderHolder {
+    private final AtomicReference<Iterable<KeyPair>> identitiesHolder = new AtomicReference<>(null);
+    private final ClientIdentityLoaderHolder loaderHolder;
+    private final FilePasswordProviderHolder providerHolder;
     private final boolean strict;
 
     public ClientIdentityFileWatcher(Path path, ClientIdentityLoader loader, FilePasswordProvider provider) {
@@ -53,59 +56,62 @@ public class ClientIdentityFileWatcher extends ModifiableFileWatcher implements 
 
     public ClientIdentityFileWatcher(Path path, ClientIdentityLoader loader, FilePasswordProvider provider, boolean strict) {
         this(path,
-             GenericUtils.supplierOf(Objects.requireNonNull(loader, "No client identity loader")),
-             GenericUtils.supplierOf(Objects.requireNonNull(provider, "No password provider")),
+             ClientIdentityLoaderHolder.loaderHolderOf(Objects.requireNonNull(loader, "No client identity loader")),
+             FilePasswordProviderHolder.providerHolderOf(Objects.requireNonNull(provider, "No password provider")),
              strict);
     }
 
-    public ClientIdentityFileWatcher(Path path, Supplier<ClientIdentityLoader> loader, Supplier<FilePasswordProvider> provider) {
+    public ClientIdentityFileWatcher(
+            Path path, ClientIdentityLoaderHolder loader, FilePasswordProviderHolder provider) {
         this(path, loader, provider, true);
     }
 
-    public ClientIdentityFileWatcher(Path path, Supplier<ClientIdentityLoader> loader, Supplier<FilePasswordProvider> provider, boolean strict) {
+    public ClientIdentityFileWatcher(
+            Path path, ClientIdentityLoaderHolder loader, FilePasswordProviderHolder provider, boolean strict) {
         super(path);
         this.loaderHolder = Objects.requireNonNull(loader, "No client identity loader");
         this.providerHolder = Objects.requireNonNull(provider, "No password provider");
         this.strict = strict;
     }
 
-    public final boolean isStrict() {
+    public boolean isStrict() {
         return strict;
     }
 
-    public final ClientIdentityLoader getClientIdentityLoader() {
-        return loaderHolder.get();
-    }
-
-    public final FilePasswordProvider getFilePasswordProvider() {
-        return providerHolder.get();
+    @Override
+    public ClientIdentityLoader getClientIdentityLoader() {
+        return loaderHolder.getClientIdentityLoader();
     }
 
     @Override
-    public KeyPair getClientIdentity() throws IOException, GeneralSecurityException {
-        if (checkReloadRequired()) {
-            KeyPair kp = identityHolder.getAndSet(null);     // start fresh
-            Path path = getPath();
-
-            if (exists()) {
-                KeyPair id = reloadClientIdentity(path);
-                if (!KeyUtils.compareKeyPairs(kp, id)) {
-                    if (log.isDebugEnabled()) {
-                        log.debug("getClientIdentity({}) identity {}", path, (kp == null) ? "loaded" : "re-loaded");
-                    }
-                }
-
-                updateReloadAttributes();
-                identityHolder.set(id);
-            }
-        }
-
-        return identityHolder.get();
+    public FilePasswordProvider getFilePasswordProvider() {
+        return providerHolder.getFilePasswordProvider();
     }
 
-    protected KeyPair reloadClientIdentity(Path path) throws IOException, GeneralSecurityException {
+    @Override
+    public Iterable<KeyPair> getClientIdentities(SessionContext session)
+            throws IOException, GeneralSecurityException {
+        if (!checkReloadRequired()) {
+            return identitiesHolder.get();
+        }
+
+        Iterable<KeyPair> kp = identitiesHolder.getAndSet(null);     // start fresh
+        Path path = getPath();
+        if (!exists()) {
+            return identitiesHolder.get();
+        }
+
+        kp = reloadClientIdentities(session, path);
+        updateReloadAttributes();
+        identitiesHolder.set(kp);
+        return kp;
+    }
+
+    protected Iterable<KeyPair> reloadClientIdentities(SessionContext session, Path path)
+            throws IOException, GeneralSecurityException {
         if (isStrict()) {
-            Map.Entry<String, Object> violation = KeyUtils.validateStrictKeyFilePermissions(path, IoUtils.EMPTY_LINK_OPTIONS);
+            Map.Entry<String, Object> violation =
+                KeyUtils.validateStrictKeyFilePermissions(path, IoUtils.EMPTY_LINK_OPTIONS);
             if (violation != null) {
                 if (log.isDebugEnabled()) {
                     log.debug("reloadClientIdentity({}) ignore due to {}", path, violation.getKey());
@@ -114,22 +120,25 @@ public class ClientIdentityFileWatcher extends ModifiableFileWatcher implements 
             }
         }
 
-        String location = path.toString();
+        PathResource location = new PathResource(path);
         ClientIdentityLoader idLoader = Objects.requireNonNull(getClientIdentityLoader(), "No client identity loader");
         if (idLoader.isValidLocation(location)) {
-            KeyPair kp = idLoader.loadClientIdentity(location, Objects.requireNonNull(getFilePasswordProvider(), "No file password provider"));
+            Iterable<KeyPair> ids = idLoader.loadClientIdentities(session, location, getFilePasswordProvider());
             if (log.isTraceEnabled()) {
-                PublicKey key = (kp == null) ? null : kp.getPublic();
-                if (key != null) {
-                    log.trace("reloadClientIdentity({}) loaded {}-{}",
-                              location, KeyUtils.getKeyType(key), KeyUtils.getFingerPrint(key));
-
+                if (ids == null) {
+                    log.trace("reloadClientIdentity({}) no keys loaded", location);
                 } else {
-                    log.trace("reloadClientIdentity({}) no key loaded", location);
+                    for (KeyPair kp : ids) {
+                        PublicKey key = (kp == null) ? null : kp.getPublic();
+                        if (key != null) {
+                            log.trace("reloadClientIdentity({}) loaded {}-{}",
+                                location, KeyUtils.getKeyType(key), KeyUtils.getFingerPrint(key));
+                        }
+                    }
                 }
             }
 
-            return kp;
+            return ids;
         }
 
         if (log.isDebugEnabled()) {

@@ -21,12 +21,13 @@ package org.apache.sshd.common;
 
 import java.nio.charset.Charset;
 import java.util.Collection;
-import java.util.Comparator;
+import java.util.Collections;
 import java.util.Map;
+import java.util.NavigableSet;
 import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.Properties;
-import java.util.TreeMap;
+import java.util.concurrent.ConcurrentHashMap;
 
 import org.apache.sshd.common.util.GenericUtils;
 import org.apache.sshd.common.util.ValidateUtils;
@@ -35,6 +36,20 @@ import org.apache.sshd.common.util.ValidateUtils;
  * @author <a href="mailto:dev@mina.apache.org">Apache MINA SSHD Project</a>
  */
 public final class PropertyResolverUtils {
+    /**
+     * Case <U>insensitive</U> {@link NavigableSet} of values considered {@code true} by {@link #parseBoolean(String)}
+     */
+    public static final NavigableSet<String> TRUE_VALUES =
+        Collections.unmodifiableNavigableSet(
+            GenericUtils.asSortedSet(String.CASE_INSENSITIVE_ORDER, "true", "t", "yes", "y", "on"));
+
+    /**
+     * Case <U>insensitive</U> {@link NavigableSet} of values considered {@code false} by {@link #parseBoolean(String)}
+     */
+    public static final NavigableSet<String> FALSE_VALUES =
+        Collections.unmodifiableNavigableSet(
+            GenericUtils.asSortedSet(String.CASE_INSENSITIVE_ORDER, "false", "f", "no", "n", "off"));
+
     private PropertyResolverUtils() {
         throw new UnsupportedOperationException("No instance allowed");
     }
@@ -68,7 +83,7 @@ public final class PropertyResolverUtils {
      *      </LI>
      *
      *      <LI>
-     *      Otherwise, the value's {@link #toString()} is parsed as a {@code long}
+     *      Otherwise, the value's {@code toString()} is parsed as a {@code long}
      *      </LI>
      * </UL>
      *
@@ -120,7 +135,7 @@ public final class PropertyResolverUtils {
      *      </LI>
      *
      *      <LI>
-     *      Otherwise, the value's {@link #toString()} is parsed as a {@link Long}
+     *      Otherwise, the value's {@code toString()} is parsed as a {@link Long}
      *      </LI>
      * </UL>
      *
@@ -148,16 +163,14 @@ public final class PropertyResolverUtils {
      *      <LI>
      *      If value is {@code null} then return {@code null}
      *      </LI>
-     *
      *      <LI>
      *      If value already of the expected type then simply
      *      cast and return it.
      *      </LI>
-     *
      *      <LI>
      *      If value is a {@link CharSequence} then convert it
      *      to a string and look for a matching enumerated value
-     *      name - case insensitive.
+     *      name - case <U>insensitive</U>.
      *      </LI>
      * </UL>
      *
@@ -170,9 +183,10 @@ public final class PropertyResolverUtils {
      * @throws IllegalArgumentException If value is neither {@code null},
      * nor the enumerated type nor a {@link CharSequence}
      * @throws NoSuchElementException If no matching string name found and
-     * {@code failIfNoMatch} is {@code true}
+     * failIfNoMatch is {@code true}
      */
-    public static <E extends Enum<E>> E toEnum(Class<E> enumType, Object value, boolean failIfNoMatch, Collection<E> available) {
+    public static <E extends Enum<E>> E toEnum(
+            Class<E> enumType, Object value, boolean failIfNoMatch, Collection<E> available) {
         if (value == null) {
             return null;
         } else if (enumType.isInstance(value)) {
@@ -193,7 +207,8 @@ public final class PropertyResolverUtils {
 
             return null;
         } else {
-            throw new IllegalArgumentException("Bad value type for enum conversion: " + value.getClass().getSimpleName());
+            throw new IllegalArgumentException(
+                "Bad value type for enum conversion: " + value.getClass().getSimpleName());
         }
     }
 
@@ -238,7 +253,7 @@ public final class PropertyResolverUtils {
             return (Integer) value;
         } else if (value instanceof Number) {
             return ((Number) value).intValue();
-        } else {    // we parse the string in case this is NOT an integer
+        } else {    // we parse the string in case this is NOT a valid integer string
             return Integer.valueOf(value.toString());
         }
     }
@@ -259,29 +274,84 @@ public final class PropertyResolverUtils {
         return toBoolean(getObject(props, name), defaultValue);
     }
 
+    /**
+     * @param value The value to convert
+     * @param defaultValue The default value to return if value is {@code null} or
+     * and empty string, then returns the default value.
+     * @return The resolved value
+     * @see #toBoolean(Object)
+     */
     public static boolean toBoolean(Object value, boolean defaultValue) {
-        if (value == null) {
+        Boolean bool = toBoolean(value);
+        if (bool == null) {
             return defaultValue;
         } else {
-            return toBoolean(value);
+            return bool;
         }
     }
 
     public static Boolean getBoolean(PropertyResolver resolver, String name) {
-        return toBoolean(resolvePropertyValue(resolver, name));
+        Object propValue = resolvePropertyValue(resolver, name);
+        return toBoolean(propValue);
     }
 
     public static Boolean getBoolean(Map<String, ?> props, String name) {
-        return toBoolean(resolvePropertyValue(props, name));
+        Object propValue = resolvePropertyValue(props, name);
+        return toBoolean(propValue);
     }
 
+    /**
+     * <P>Attempts to convert the object into a {@link Boolean} value as follows:</P>
+     * <UL>
+     *      <LI>
+     *      If {@code null} or an empty string then return {@code null}.
+     *      </LI>
+     *      <LI>
+     *      If already a {@link Boolean} then return as-is
+     *      </LI>
+     *      <LI>
+     *      If a {@link CharSequence} then invoke {@link #parseBoolean(String)}
+     *      </LI>
+     *      <LI>
+     *      Otherwise, throws an {@link UnsupportedOperationException}
+     *      </LI>
+     * </UL>
+     * @param value The value to be converted
+     * @return The result - {@code null} if {@code null} or an empty string
+     * @throws UnsupportedOperationException If value cannot be converted to a boolean - e.g., a number.
+     * @see #parseBoolean(String)
+     */
     public static Boolean toBoolean(Object value) {
         if (value == null) {
             return null;
         } else if (value instanceof Boolean) {
             return (Boolean) value;
+        } else if (value instanceof CharSequence) {
+            return parseBoolean(value.toString());
         } else {
-            return Boolean.valueOf(value.toString());
+            throw new UnsupportedOperationException(
+                "Cannot convert " + value.getClass().getSimpleName() + "[" + value + "] to boolean");
+        }
+    }
+
+    /**
+     * Converts a string to a {@link Boolean} value by looking for it in either the {@link #TRUE_VALUES}
+     * or {@link #FALSE_VALUES}
+     *
+     * @param value The value to parse
+     * @return The result - {@code null} if value is {@code null}/empty
+     * @throws IllegalArgumentException If non-empty string that does not match (case <U>insensitive</U>)
+     * either of the known values for boolean.
+     */
+    public static Boolean parseBoolean(String value) {
+        if (GenericUtils.isEmpty(value)) {
+            return null;
+        } else if (TRUE_VALUES.contains(value)) {
+            return Boolean.TRUE;
+        } else if (FALSE_VALUES.contains(value)) {
+            return Boolean.FALSE;
+        } else {
+            throw new IllegalArgumentException("Unknown boolean value: '" + value + "'");
         }
     }
 
@@ -360,7 +430,7 @@ public final class PropertyResolverUtils {
 
     public static Object resolvePropertyValue(Map<String, ?> props, String name) {
         String key = ValidateUtils.checkNotNullAndNotEmpty(name, "No property name");
-        return props != null ? props.get(key) : null;
+        return (props != null) ? props.get(key) : null;
     }
 
     /**
@@ -397,11 +467,9 @@ public final class PropertyResolverUtils {
         String key = ValidateUtils.checkNotNullAndNotEmpty(name, "No property name");
         for (PropertyResolver r = resolver; r != null; r = r.getParentPropertyResolver()) {
             Map<String, ?> props = r.getProperties();
-            if (props != null) {
-                Object value = props.get(key);
-                if (value != null) {
-                    return value;
-                }
+            Object value = getObject(props, key);
+            if (value != null) {
+                return value;
             }
         }
 
@@ -420,11 +488,9 @@ public final class PropertyResolverUtils {
         String key = ValidateUtils.checkNotNullAndNotEmpty(name, "No property name");
         for (PropertyResolver r = resolver; r != null; r = r.getParentPropertyResolver()) {
             Map<String, Object> props = r.getProperties();
-            if (props != null) {
-                Object value = props.get(key);
-                if (value != null) {
-                    return props;
-                }
+            Object value = getObject(props, key);
+            if (value != null) {
+                return props;
             }
         }
 
@@ -436,8 +502,8 @@ public final class PropertyResolverUtils {
             return PropertyResolver.EMPTY;
         }
 
-        Map<String, Object> propsMap = new TreeMap<>(Comparator.naturalOrder());
         Collection<String> names = props.stringPropertyNames();
+        Map<String, Object> propsMap = new ConcurrentHashMap<>(GenericUtils.size(names));
         for (String key : names) {
             String value = props.getProperty(key);
             if (value == null) {
@@ -457,11 +523,11 @@ public final class PropertyResolverUtils {
      * are updated
      * @return The resolver wrapper
      */
-    public static PropertyResolver toPropertyResolver(Map<String, Object> props) {
+    public static PropertyResolver toPropertyResolver(Map<String, ?> props) {
         return toPropertyResolver(props, null);
     }
 
-    public static PropertyResolver toPropertyResolver(Map<String, Object> props, PropertyResolver parent) {
+    public static PropertyResolver toPropertyResolver(Map<String, ?> props, PropertyResolver parent) {
         return new PropertyResolver() {
             @Override
             public PropertyResolver getParentPropertyResolver() {
@@ -469,8 +535,9 @@ public final class PropertyResolverUtils {
             }
 
             @Override
+            @SuppressWarnings({ "unchecked", "rawtypes" })
             public Map<String, Object> getProperties() {
-                return props;
+                return (Map) props;
             }
 
             @Override

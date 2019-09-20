@@ -34,9 +34,12 @@ import java.security.spec.RSAPublicKeySpec;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 
+import org.apache.sshd.common.NamedResource;
 import org.apache.sshd.common.config.keys.FilePasswordProvider;
 import org.apache.sshd.common.config.keys.KeyUtils;
+import org.apache.sshd.common.session.SessionContext;
 import org.apache.sshd.common.util.io.NoCloseInputStream;
 import org.apache.sshd.common.util.io.der.ASN1Object;
 import org.apache.sshd.common.util.io.der.ASN1Type;
@@ -50,11 +53,11 @@ public class RSAPEMResourceKeyPairParser extends AbstractPEMResourceKeyPairParse
     // Not exactly according to standard but good enough
     public static final String BEGIN_MARKER = "BEGIN RSA PRIVATE KEY";
     public static final List<String> BEGINNERS =
-            Collections.unmodifiableList(Collections.singletonList(BEGIN_MARKER));
+        Collections.unmodifiableList(Collections.singletonList(BEGIN_MARKER));
 
     public static final String END_MARKER = "END RSA PRIVATE KEY";
     public static final List<String> ENDERS =
-            Collections.unmodifiableList(Collections.singletonList(END_MARKER));
+        Collections.unmodifiableList(Collections.singletonList(END_MARKER));
 
     /**
      * @see <A HREF="https://tools.ietf.org/html/rfc3279#section-2.3.1">RFC-3279 section 2.3.1</A>
@@ -69,8 +72,11 @@ public class RSAPEMResourceKeyPairParser extends AbstractPEMResourceKeyPairParse
 
     @Override
     public Collection<KeyPair> extractKeyPairs(
-            String resourceKey, String beginMarker, String endMarker, FilePasswordProvider passwordProvider, InputStream stream)
-                    throws IOException, GeneralSecurityException {
+            SessionContext session, NamedResource resourceKey,
+            String beginMarker, String endMarker,
+            FilePasswordProvider passwordProvider,
+            InputStream stream, Map<String, String> headers)
+                throws IOException, GeneralSecurityException {
         KeyPair kp = decodeRSAKeyPair(SecurityUtils.getKeyFactory(KeyUtils.RSA_ALGORITHM), stream, false);
         return Collections.singletonList(kp);
     }

@@ -19,49 +19,68 @@
 
 package org.apache.sshd.common.config;
 
-import java.io.FileNotFoundException;
 import java.io.InputStream;
 import java.util.Collections;
-import java.util.Map;
+import java.util.Iterator;
+import java.util.NavigableMap;
 import java.util.Properties;
 import java.util.TreeMap;
 
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
 import org.apache.sshd.common.util.GenericUtils;
 import org.apache.sshd.common.util.threads.ThreadUtils;
+import org.apache.logging.log4j.Logger;
+import org.apache.logging.log4j.LogManager;
 
 /**
  * @author <a href="mailto:dev@mina.apache.org">Apache MINA SSHD Project</a>
  */
 public final class VersionProperties {
-    private static class LazyHolder {
-        private static final Map<String, String> PROPERTIES =
-                Collections.unmodifiableMap(loadVersionProperties(LazyHolder.class));
+    /**
+     * Property used to hold the reported version
+     */
+    public static final String REPORTED_VERSION = "sshd-version";
 
-        private static Map<String, String> loadVersionProperties(Class<?> anchor) {
-            return loadVersionProperties(anchor, ThreadUtils.resolveDefaultClassLoader(anchor));
+    private static final class LazyVersionPropertiesHolder {
+        private static final NavigableMap<String, String> PROPERTIES =
+            Collections.unmodifiableNavigableMap(
+                loadVersionProperties(LazyVersionPropertiesHolder.class));
+
+        private LazyVersionPropertiesHolder() {
+            throw new UnsupportedOperationException("No instance allowed");
         }
 
-        private static Map<String, String> loadVersionProperties(Class<?> anchor, ClassLoader loader) {
-            Map<String, String> result = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
-            try {
-                InputStream input = loader.getResourceAsStream("org/apache/sshd/sshd-version.properties");
-                if (input == null) {
-                    throw new FileNotFoundException("Resource does not exists");
-                }
+        private static NavigableMap<String, String> loadVersionProperties(Class<?> anchor) {
+            return loadVersionProperties(anchor, ThreadUtils.iterateDefaultClassLoaders(anchor));
+        }
 
-                Properties props = new Properties();
-                try {
+        private static NavigableMap<String, String> loadVersionProperties(
+                Class<?> anchor, Iterator<? extends ClassLoader> loaders) {
+            while ((loaders != null) && loaders.hasNext()) {
+                ClassLoader cl = loaders.next();
+                Properties props;
+                try (InputStream input = cl.getResourceAsStream("org/apache/sshd/sshd-version.properties")) {
+                    if (input == null) {
+                        continue;
+                    }
+
+                    props = new Properties();
                     props.load(input);
-                } finally {
-                    input.close();
+                } catch (Exception e) {
+                    Logger log = LogManager.getLogger(anchor);
+                    log.warn("Failed ({}) to load version properties from {}: {}",
+                        e.getClass().getSimpleName(), cl, e.getMessage());
+                    if (log.isDebugEnabled()) {
+                        log.debug("Version property failure details for loader=" + cl, e);
+                    }
+                    continue;
                 }
 
+                NavigableMap<String, String> result = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
                 for (String key : props.stringPropertyNames()) {
-                    String value = GenericUtils.trimToEmpty(props.getProperty(key));
+                    String propValue = props.getProperty(key);
+                    String value = GenericUtils.trimToEmpty(propValue);
                     if (GenericUtils.isEmpty(value)) {
-                        continue;   // we have no need for empty value
+                        continue;   // we have no need for empty values
                     }
 
                     String prev = result.put(key, value);
@@ -70,12 +89,11 @@ public final class VersionProperties {
                         log.warn("Multiple values for key=" + key + ": current=" + value + ", previous=" + prev);
                     }
                 }
-            } catch (Exception e) {
-                Logger log = LogManager.getLogger(anchor);
-                log.warn("Failed (" + e.getClass().getSimpleName() + ") to load version properties: " + e.getMessage());
+
+                return result;
             }
 
-            return result;
+            return Collections.emptyNavigableMap();
         }
     }
 
@@ -83,9 +101,11 @@ public final class VersionProperties {
         throw new UnsupportedOperationException("No instance");
     }
 
+    /**
+     * @return A case <u>insensitive</u> un-modifiable {@link NavigableMap} of the {@code sshd-version.properties} data
+     */
     @SuppressWarnings("synthetic-access")
-    public static Map<String, String> getVersionProperties() {
-        return LazyHolder.PROPERTIES;
+    public static NavigableMap<String, String> getVersionProperties() {
+        return LazyVersionPropertiesHolder.PROPERTIES;
     }
-
 }

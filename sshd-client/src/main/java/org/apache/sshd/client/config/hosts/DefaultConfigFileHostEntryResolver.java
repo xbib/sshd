@@ -19,16 +19,12 @@
 
 package org.apache.sshd.client.config.hosts;
 
-import java.io.File;
 import java.io.IOException;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
-
-import org.apache.sshd.common.util.io.IoUtils;
 
 /**
  * Monitors the {@code ~/.ssh/config} file of the user currently running
@@ -47,16 +43,12 @@ public class DefaultConfigFileHostEntryResolver extends ConfigFileHostEntryResol
 
     /**
      * @param strict If {@code true} then makes sure that the containing folder
-     *               has 0700 access and the file 0644. <B>Note:</B> for <I>Windows</I> it
-     *               does not check these permissions
+     * has 0700 access and the file 0644. <B>Note:</B> for <I>Windows</I> it
+     * does not check these permissions
      * @see #validateStrictConfigFilePermissions(Path, LinkOption...)
      */
     public DefaultConfigFileHostEntryResolver(boolean strict) {
         this(HostConfigEntry.getDefaultHostConfigFile(), strict);
-    }
-
-    public DefaultConfigFileHostEntryResolver(File file, boolean strict) {
-        this(Objects.requireNonNull(file, "No file provided").toPath(), strict, IoUtils.getLinkOptions(true));
     }
 
     public DefaultConfigFileHostEntryResolver(Path path, boolean strict, LinkOption... options) {

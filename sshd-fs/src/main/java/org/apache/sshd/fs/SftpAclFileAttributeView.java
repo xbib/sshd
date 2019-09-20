@@ -19,8 +19,6 @@
 
 package org.apache.sshd.fs;
 
-import org.apache.sshd.client.subsystem.sftp.SftpClient;
-
 import java.io.IOException;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
@@ -29,6 +27,8 @@ import java.nio.file.attribute.AclFileAttributeView;
 import java.nio.file.attribute.PosixFileAttributes;
 import java.nio.file.attribute.UserPrincipal;
 import java.util.List;
+
+import org.apache.sshd.client.subsystem.sftp.SftpClient;
 
 /**
  * @author <a href="mailto:dev@mina.apache.org">Apache MINA SSHD Project</a>

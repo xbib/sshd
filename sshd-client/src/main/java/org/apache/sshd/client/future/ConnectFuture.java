@@ -46,7 +46,7 @@ public interface ConnectFuture extends SshFuture<ConnectFuture>, VerifiableFutur
 
     /**
      * Sets the newly connected session and notifies all threads waiting for
-     * this future.  This method is invoked by SSHD internally.  Please do not
+     * this future. This method is invoked by SSHD internally. Please do not
      * call this method directly.
      *
      * @param session The {@link ClientSession}
@@ -56,7 +56,7 @@ public interface ConnectFuture extends SshFuture<ConnectFuture>, VerifiableFutur
     /**
      * Returns the cause of the connection failure.
      *
-     * @return <code>null</code> if the connect operation is not finished yet,
+     * @return {@code null} if the connect operation is not finished yet,
      * or if the connection attempt is successful (use {@link #isDone()} to
      * distinguish between the two)
      */
@@ -64,8 +64,8 @@ public interface ConnectFuture extends SshFuture<ConnectFuture>, VerifiableFutur
 
     /**
      * Sets the exception caught due to connection failure and notifies all
-     * threads waiting for this future.  This method is invoked by SSHD
-     * internally.  Please do not call this method directly.
+     * threads waiting for this future. This method is invoked by SSHD
+     * internally. Please do not call this method directly.
      *
      * @param exception The caught {@link Throwable}
      */

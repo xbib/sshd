@@ -19,15 +19,15 @@
 
 package org.apache.sshd.common.cipher;
 
+import org.apache.sshd.common.AlgorithmNameProvider;
+import org.apache.sshd.common.keyprovider.KeySizeIndicator;
+
 /**
+ * The reported algorithm name refers to the cipher base name - e.g., &quot;AES&quot;, &quot;ARCFOUR&quot;, etc.
+ *
  * @author <a href="mailto:dev@mina.apache.org">Apache MINA SSHD Project</a>
  */
-public interface CipherInformation {
-    /**
-     * @return The cipher's algorithm
-     */
-    String getAlgorithm();
-
+public interface CipherInformation extends AlgorithmNameProvider, KeySizeIndicator {
     /**
      * @return The actual transformation used - e.g., AES/CBC/NoPadding
      */
@@ -39,7 +39,15 @@ public interface CipherInformation {
     int getIVSize();
 
     /**
-     * @return The block size (in bytes) for this cipher
+     * @return Size of block data used by the cipher (in bytes). For stream
+     * ciphers this value is (currently) used to indicate some average work
+     * buffer size to be used for the automatic re-keying mechanism described
+     * in <a href="https://tools.ietf.org/html/rfc4253#section-9">RFC 4253 - Section 9</a>
      */
-    int getBlockSize();
+    int getCipherBlockSize();
+
+    /**
+     * @return The block size (in bytes) used to derive the secret key for this cipher
+     */
+    int getKdfSize();
 }

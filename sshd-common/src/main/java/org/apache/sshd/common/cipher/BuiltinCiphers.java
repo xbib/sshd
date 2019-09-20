@@ -26,6 +26,7 @@ import java.util.Collections;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
+import java.util.NavigableSet;
 import java.util.Objects;
 import java.util.Set;
 import java.util.SortedSet;
@@ -45,54 +46,58 @@ import org.apache.sshd.common.util.ValidateUtils;
  * @author <a href="mailto:dev@mina.apache.org">Apache MINA SSHD Project</a>
  */
 public enum BuiltinCiphers implements CipherFactory {
-    none(Constants.NONE, 0, 0, "None", "None") {
+    none(Constants.NONE, 0, 0, "None", 0, "None", 0) {
         @Override
         public Cipher create() {
             return new CipherNone();
         }
     },
-    aes128cbc(Constants.AES128_CBC, 16, 16, "AES", "AES/CBC/NoPadding"),
-    aes128ctr(Constants.AES128_CTR, 16, 16, "AES", "AES/CTR/NoPadding"),
-    aes192cbc(Constants.AES192_CBC, 16, 24, "AES", "AES/CBC/NoPadding"),
-    aes192ctr(Constants.AES192_CTR, 16, 24, "AES", "AES/CTR/NoPadding"),
-    aes256cbc(Constants.AES256_CBC, 16, 32, "AES", "AES/CBC/NoPadding"),
-    aes256ctr(Constants.AES256_CTR, 16, 32, "AES", "AES/CTR/NoPadding"),
-    arcfour128(Constants.ARCFOUR128, 8, 16, "ARCFOUR", "RC4") {
+    aes128cbc(Constants.AES128_CBC, 16, 16, "AES", 128, "AES/CBC/NoPadding", 16),
+    aes128ctr(Constants.AES128_CTR, 16, 16, "AES", 128, "AES/CTR/NoPadding", 16),
+    aes192cbc(Constants.AES192_CBC, 16, 24, "AES", 192, "AES/CBC/NoPadding", 16),
+    aes192ctr(Constants.AES192_CTR, 16, 24, "AES", 192, "AES/CTR/NoPadding", 16),
+    aes256cbc(Constants.AES256_CBC, 16, 32, "AES", 256, "AES/CBC/NoPadding", 16),
+    aes256ctr(Constants.AES256_CTR, 16, 32, "AES", 256, "AES/CTR/NoPadding", 16),
+    arcfour128(Constants.ARCFOUR128, 8, 16, "ARCFOUR", 128, "RC4", 16) {
         @Override
         public Cipher create() {
-            return new BaseRC4Cipher(getIVSize(), getBlockSize());
+            return new BaseRC4Cipher(getIVSize(), getKdfSize(), getKeySize(), getCipherBlockSize());
         }
     },
-    arcfour256(Constants.ARCFOUR256, 8, 32, "ARCFOUR", "RC4") {
+    arcfour256(Constants.ARCFOUR256, 8, 32, "ARCFOUR", 256, "RC4", 32) {
         @Override
         public Cipher create() {
-            return new BaseRC4Cipher(getIVSize(), getBlockSize());
+            return new BaseRC4Cipher(getIVSize(), getKdfSize(), getKeySize(), getCipherBlockSize());
         }
     },
-    blowfishcbc(Constants.BLOWFISH_CBC, 8, 16, "Blowfish", "Blowfish/CBC/NoPadding"),
-    tripledescbc(Constants.TRIPLE_DES_CBC, 8, 24, "DESede", "DESede/CBC/NoPadding");
+    blowfishcbc(Constants.BLOWFISH_CBC, 8, 16, "Blowfish", 128, "Blowfish/CBC/NoPadding", 8),
+    tripledescbc(Constants.TRIPLE_DES_CBC, 8, 24, "DESede", 192, "DESede/CBC/NoPadding", 8);
 
     public static final Set<BuiltinCiphers> VALUES =
-            Collections.unmodifiableSet(EnumSet.allOf(BuiltinCiphers.class));
+        Collections.unmodifiableSet(EnumSet.allOf(BuiltinCiphers.class));
 
     private static final Map<String, CipherFactory> EXTENSIONS =
-            new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+        new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
 
     private final String factoryName;
     private final int ivsize;
-    private final int blocksize;
+    private final int kdfSize;
     private final int keysize;
+    private final int blkSize;
     private final String algorithm;
     private final String transformation;
     private final boolean supported;
 
-    BuiltinCiphers(String factoryName, int ivsize, int blocksize, String algorithm, String transformation) {
+    BuiltinCiphers(
+            String factoryName, int ivsize, int kdfSize,
+            String algorithm, int keySize, String transformation, int blkSize) {
         this.factoryName = factoryName;
         this.ivsize = ivsize;
-        this.blocksize = blocksize;
-        this.keysize = blocksize * Byte.SIZE;
+        this.kdfSize = kdfSize;
+        this.keysize = keySize;
         this.algorithm = algorithm;
         this.transformation = transformation;
+        this.blkSize = blkSize;
         /*
          * This can be done once since in order to change the support the JVM
          * needs to be stopped, some unlimited-strength files need be installed
@@ -122,9 +127,7 @@ public enum BuiltinCiphers implements CipherFactory {
         return supported;
     }
 
-    /**
-     * @return The key size (in bits) for the cipher
-     */
+    @Override
     public int getKeySize() {
         return keysize;
     }
@@ -135,8 +138,13 @@ public enum BuiltinCiphers implements CipherFactory {
     }
 
     @Override
-    public int getBlockSize() {
-        return blocksize;
+    public int getKdfSize() {
+        return kdfSize;
+    }
+
+    @Override
+    public int getCipherBlockSize() {
+        return blkSize;
     }
 
     @Override
@@ -151,7 +159,9 @@ public enum BuiltinCiphers implements CipherFactory {
 
     @Override
     public Cipher create() {
-        return new BaseCipher(getIVSize(), getBlockSize(), getAlgorithm(), getTransformation());
+        return new BaseCipher(
+            getIVSize(), getKdfSize(), getAlgorithm(),
+            getKeySize(), getTransformation(), getCipherBlockSize());
     }
 
     /**
@@ -160,8 +170,8 @@ public enum BuiltinCiphers implements CipherFactory {
      *
      * @param extension The factory to register
      * @throws IllegalArgumentException if factory instance is {@code null},
-     *                                  or overrides a built-in one or overrides another registered factory
-     *                                  with the same name (case <U>insensitive</U>).
+     * or overrides a built-in one or overrides another registered factory
+     * with the same name (case <U>insensitive</U>).
      */
     public static void registerExtension(CipherFactory extension) {
         String name = Objects.requireNonNull(extension, "No extension provided").getName();
@@ -177,7 +187,7 @@ public enum BuiltinCiphers implements CipherFactory {
      * @return A {@link SortedSet} of the currently registered extensions, sorted
      * according to the factory name (case <U>insensitive</U>)
      */
-    public static SortedSet<CipherFactory> getRegisteredExtensions() {
+    public static NavigableSet<CipherFactory> getRegisteredExtensions() {
         synchronized (EXTENSIONS) {
             return GenericUtils.asSortedSet(NamedResource.BY_NAME_COMPARATOR, EXTENSIONS.values());
         }
@@ -311,7 +321,7 @@ public enum BuiltinCiphers implements CipherFactory {
         }
     }
 
-    public static class Constants {
+    public static final class Constants {
         public static final String NONE = "none";
         public static final Pattern NONE_CIPHER_PATTERN =
                 Pattern.compile("(^|.*,)" + NONE + "($|,.*)");
@@ -326,6 +336,10 @@ public enum BuiltinCiphers implements CipherFactory {
         public static final String ARCFOUR256 = "arcfour256";
         public static final String BLOWFISH_CBC = "blowfish-cbc";
         public static final String TRIPLE_DES_CBC = "3des-cbc";
+
+        private Constants() {
+            throw new UnsupportedOperationException("No instance allowed");
+        }
 
         /**
          * @param s A comma-separated list of ciphers - ignored if {@code null}/empty

@@ -35,7 +35,6 @@ import java.security.PrivateKey;
 import java.security.PublicKey;
 import java.security.Signature;
 import java.security.cert.CertificateFactory;
-import java.security.spec.InvalidKeySpecException;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
@@ -57,8 +56,7 @@ import javax.crypto.KeyAgreement;
 import javax.crypto.Mac;
 import javax.crypto.spec.DHParameterSpec;
 
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import org.apache.sshd.common.NamedResource;
 import org.apache.sshd.common.config.keys.FilePasswordProvider;
 import org.apache.sshd.common.config.keys.KeyUtils;
 import org.apache.sshd.common.config.keys.PrivateKeyEntryDecoder;
@@ -69,15 +67,16 @@ import org.apache.sshd.common.config.keys.loader.pem.PEMResourceParserUtils;
 import org.apache.sshd.common.keyprovider.KeyPairProvider;
 import org.apache.sshd.common.random.JceRandomFactory;
 import org.apache.sshd.common.random.RandomFactory;
+import org.apache.sshd.common.session.SessionContext;
 import org.apache.sshd.common.util.GenericUtils;
 import org.apache.sshd.common.util.ValidateUtils;
 import org.apache.sshd.common.util.buffer.Buffer;
-import org.apache.sshd.common.util.security.bouncycastle.BouncyCastleGeneratorHostKeyProvider;
 import org.apache.sshd.common.util.security.bouncycastle.BouncyCastleKeyPairResourceParser;
 import org.apache.sshd.common.util.security.bouncycastle.BouncyCastleRandomFactory;
 import org.apache.sshd.common.util.security.eddsa.EdDSASecurityProviderUtils;
 import org.apache.sshd.common.util.threads.ThreadUtils;
-import org.apache.sshd.common.keyprovider.AbstractGeneratorHostKeyProvider;
+import org.apache.logging.log4j.Logger;
+import org.apache.logging.log4j.LogManager;
 
 /**
  * Specific security providers related code
@@ -125,10 +124,10 @@ public final class SecurityUtils {
      */
     public static final String SECURITY_PROVIDER_REGISTRARS = "org.apache.sshd.security.registrars";
     public static final List<String> DEFAULT_SECURITY_PROVIDER_REGISTRARS =
-            Collections.unmodifiableList(
-                    Arrays.asList(
-                            "org.apache.sshd.common.util.security.bouncycastle.BouncyCastleSecurityProviderRegistrar",
-                            "org.apache.sshd.common.util.security.eddsa.EdDSASecurityProviderRegistrar"));
+        Collections.unmodifiableList(
+            Arrays.asList(
+                "org.apache.sshd.common.util.security.bouncycastle.BouncyCastleSecurityProviderRegistrar",
+                "org.apache.sshd.common.util.security.eddsa.EdDSASecurityProviderRegistrar"));
 
 
     /**
@@ -145,6 +144,16 @@ public final class SecurityUtils {
      * it is up to the user to make sure that indeed there is a provider for them
      */
     public static final String ECC_SUPPORTED_PROP = "org.apache.sshd.eccSupport";
+
+    /**
+     * System property used to decide whether EDDSA curves are supported or not
+     * (in addition or even in spite of {@link #isEDDSACurveSupported()}). If not
+     * set or set to {@code true}, then the existence of the optional support classes
+     * determines the support.
+     * @deprecated Please use &quot;org.apache.sshd.security.provider.EdDSA.enabled&quot;
+     */
+    @Deprecated
+    public static final String EDDSA_SUPPORTED_PROP = "org.apache.sshd.eddsaSupport";
 
     public static final String PROP_DEFAULT_SECURITY_PROVIDER = "org.apache.sshd.security.defaultProvider";
 
@@ -380,6 +389,7 @@ public final class SecurityUtils {
             if ((GenericUtils.length(regsList) > 0) && (!"none".equalsIgnoreCase(regsList))) {
                 String[] classes = GenericUtils.split(regsList, ',');
                 Logger logger = LogManager.getLogger(SecurityUtils.class);
+                boolean debugEnabled = logger.isDebugEnabled();
                 for (String registrarClass : classes) {
                     SecurityProviderRegistrar r;
                     try {
@@ -400,7 +410,7 @@ public final class SecurityUtils {
                     String name = r.getName();
                     SecurityProviderRegistrar registeredInstance = registerSecurityProvider(r);
                     if (registeredInstance == null) {
-                        if (logger.isDebugEnabled()) {
+                        if (debugEnabled) {
                             logger.debug("register({}) not registered - enabled={}, supported={}",
                                          name, r.isEnabled(), r.isSupported());
                         }
@@ -456,41 +466,40 @@ public final class SecurityUtils {
     /* -------------------------------------------------------------------- */
 
     /**
+     * @param session The {@link SessionContext} for invoking this load command - may
+     * be {@code null} if not invoked within a session context (e.g., offline tool).
      * @param resourceKey An identifier of the key being loaded - used as
-     *                    argument to the {@link FilePasswordProvider#getPassword(String)}
-     *                    invocation
+     * argument to the {@code FilePasswordProvider#getPassword} invocation
      * @param inputStream The {@link InputStream} for the <U>private</U> key
      * @param provider    A {@link FilePasswordProvider} - may be {@code null}
      *                    if the loaded key is <U>guaranteed</U> not to be encrypted
-     * @return The loaded {@link KeyPair}
+     * @return The loaded {@link KeyPair}-s - or {@code null} if none loaded
      * @throws IOException              If failed to read/parse the input stream
      * @throws GeneralSecurityException If failed to generate the keys
      */
-    public static KeyPair loadKeyPairIdentity(String resourceKey, InputStream inputStream, FilePasswordProvider provider)
-            throws IOException, GeneralSecurityException {
+    public static Iterable<KeyPair> loadKeyPairIdentities(
+            SessionContext session, NamedResource resourceKey, InputStream inputStream, FilePasswordProvider provider)
+                throws IOException, GeneralSecurityException {
         KeyPairResourceParser parser = getKeyPairResourceParser();
         if (parser == null) {
             throw new NoSuchProviderException("No registered key-pair resource parser");
         }
 
-        Collection<KeyPair> ids = parser.loadKeyPairs(resourceKey, provider, inputStream);
+        Collection<KeyPair> ids = parser.loadKeyPairs(session, resourceKey, provider, inputStream);
         int numLoaded = GenericUtils.size(ids);
         if (numLoaded <= 0) {
-            throw new InvalidKeyException("Unsupported private key file format: " + resourceKey);
-        }
-        if (numLoaded != 1) {
-            throw new InvalidKeySpecException("Multiple private key pairs N/A: " + resourceKey);
+            return null;
         }
 
-        return ids.iterator().next();
+        return ids;
     }
 
     /* -------------------------------------------------------------------- */
 
-    public static AbstractGeneratorHostKeyProvider createGeneratorHostKeyProvider(Path path) {
+    /*public static AbstractGeneratorHostKeyProvider createGeneratorHostKeyProvider(Path path) {
         ValidateUtils.checkTrue(isBouncyCastleRegistered(), "BouncyCastle not registered");
         return new BouncyCastleGeneratorHostKeyProvider(path);
-    }
+    }*/
 
     public static KeyPairResourceParser getBouncycastleKeyPairResourceParser() {
         ValidateUtils.checkTrue(isBouncyCastleRegistered(), "BouncyCastle not registered");
@@ -630,8 +639,8 @@ public final class SecurityUtils {
             }
 
             parser = KeyPairResourceParser.aggregate(
-                    PEMResourceParserUtils.PROXY,
-                    OpenSSHKeyPairResourceParser.INSTANCE);
+                PEMResourceParserUtils.PROXY,
+                OpenSSHKeyPairResourceParser.INSTANCE);
             KEYPAIRS_PARSER_HODLER.set(parser);
         }
 
@@ -657,16 +666,15 @@ public final class SecurityUtils {
         Map<String, SecurityEntityFactory<?>> factoriesMap;
         synchronized (SECURITY_ENTITY_FACTORIES) {
             factoriesMap =
-                    SECURITY_ENTITY_FACTORIES.computeIfAbsent(
-                            entityType, k -> new TreeMap<>(String.CASE_INSENSITIVE_ORDER));
+                SECURITY_ENTITY_FACTORIES.computeIfAbsent(
+                    entityType, k -> new TreeMap<>(String.CASE_INSENSITIVE_ORDER));
         }
 
         String effectiveName = SecurityProviderRegistrar.getEffectiveSecurityEntityName(entityType, algorithm);
         SecurityEntityFactory<?> factoryEntry;
         synchronized (factoriesMap) {
-            factoryEntry =
-                    factoriesMap.computeIfAbsent(
-                            effectiveName, k -> createSecurityEntityFactory(entityType, entitySelector));
+            factoryEntry = factoriesMap.computeIfAbsent(
+                effectiveName, k -> createSecurityEntityFactory(entityType, entitySelector));
         }
 
         return (SecurityEntityFactory<T>) factoryEntry;
@@ -680,7 +688,7 @@ public final class SecurityUtils {
         synchronized (REGISTERED_PROVIDERS) {
             registrar =
                  SecurityProviderRegistrar.findSecurityProviderRegistrarBySecurityEntity(
-                         entitySelector, REGISTERED_PROVIDERS.values());
+                     entitySelector, REGISTERED_PROVIDERS.values());
         }
 
         try {
@@ -699,49 +707,49 @@ public final class SecurityUtils {
 
     public static KeyFactory getKeyFactory(String algorithm) throws GeneralSecurityException {
         SecurityEntityFactory<KeyFactory> factory =
-                resolveSecurityEntityFactory(KeyFactory.class, algorithm, r -> r.isKeyFactorySupported(algorithm));
+            resolveSecurityEntityFactory(KeyFactory.class, algorithm, r -> r.isKeyFactorySupported(algorithm));
         return factory.getInstance(algorithm);
     }
 
     public static Cipher getCipher(String transformation) throws GeneralSecurityException {
         SecurityEntityFactory<Cipher> factory =
-                resolveSecurityEntityFactory(Cipher.class, transformation, r -> r.isCipherSupported(transformation));
+            resolveSecurityEntityFactory(Cipher.class, transformation, r -> r.isCipherSupported(transformation));
         return factory.getInstance(transformation);
     }
 
     public static MessageDigest getMessageDigest(String algorithm) throws GeneralSecurityException {
         SecurityEntityFactory<MessageDigest> factory =
-                resolveSecurityEntityFactory(MessageDigest.class, algorithm, r -> r.isMessageDigestSupported(algorithm));
+            resolveSecurityEntityFactory(MessageDigest.class, algorithm, r -> r.isMessageDigestSupported(algorithm));
         return factory.getInstance(algorithm);
     }
 
     public static KeyPairGenerator getKeyPairGenerator(String algorithm) throws GeneralSecurityException {
         SecurityEntityFactory<KeyPairGenerator> factory =
-                resolveSecurityEntityFactory(KeyPairGenerator.class, algorithm, r -> r.isKeyPairGeneratorSupported(algorithm));
+            resolveSecurityEntityFactory(KeyPairGenerator.class, algorithm, r -> r.isKeyPairGeneratorSupported(algorithm));
         return factory.getInstance(algorithm);
     }
 
     public static KeyAgreement getKeyAgreement(String algorithm) throws GeneralSecurityException {
         SecurityEntityFactory<KeyAgreement> factory =
-                resolveSecurityEntityFactory(KeyAgreement.class, algorithm, r -> r.isKeyAgreementSupported(algorithm));
+            resolveSecurityEntityFactory(KeyAgreement.class, algorithm, r -> r.isKeyAgreementSupported(algorithm));
         return factory.getInstance(algorithm);
     }
 
     public static Mac getMac(String algorithm) throws GeneralSecurityException {
         SecurityEntityFactory<Mac> factory =
-                resolveSecurityEntityFactory(Mac.class, algorithm, r -> r.isMacSupported(algorithm));
+            resolveSecurityEntityFactory(Mac.class, algorithm, r -> r.isMacSupported(algorithm));
         return factory.getInstance(algorithm);
     }
 
     public static Signature getSignature(String algorithm) throws GeneralSecurityException {
         SecurityEntityFactory<Signature> factory =
-                resolveSecurityEntityFactory(Signature.class, algorithm, r -> r.isSignatureSupported(algorithm));
+            resolveSecurityEntityFactory(Signature.class, algorithm, r -> r.isSignatureSupported(algorithm));
         return factory.getInstance(algorithm);
     }
 
     public static CertificateFactory getCertificateFactory(String type) throws GeneralSecurityException {
         SecurityEntityFactory<CertificateFactory> factory =
-                resolveSecurityEntityFactory(CertificateFactory.class, type, r -> r.isCertificateFactorySupported(type));
+            resolveSecurityEntityFactory(CertificateFactory.class, type, r -> r.isCertificateFactorySupported(type));
         return factory.getInstance(type);
     }
 }

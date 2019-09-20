@@ -41,6 +41,7 @@ import org.apache.sshd.common.config.keys.KeyEntryResolver;
 import org.apache.sshd.common.config.keys.KeyUtils;
 import org.apache.sshd.common.config.keys.impl.AbstractPrivateKeyEntryDecoder;
 import org.apache.sshd.common.keyprovider.KeyPairProvider;
+import org.apache.sshd.common.session.SessionContext;
 import org.apache.sshd.common.util.security.SecurityUtils;
 
 /**
@@ -55,8 +56,9 @@ public class OpenSSHRSAPrivateKeyDecoder extends AbstractPrivateKeyEntryDecoder<
     }
 
     @Override
-    public RSAPrivateKey decodePrivateKey(String keyType, FilePasswordProvider passwordProvider, InputStream keyData)
-            throws IOException, GeneralSecurityException {
+    public RSAPrivateKey decodePrivateKey(
+            SessionContext session, String keyType, FilePasswordProvider passwordProvider, InputStream keyData)
+                throws IOException, GeneralSecurityException {
         if (!KeyPairProvider.SSH_RSA.equals(keyType)) { // just in case we were invoked directly
             throw new InvalidKeySpecException("Unexpected key type: " + keyType);
         }
@@ -74,11 +76,18 @@ public class OpenSSHRSAPrivateKeyDecoder extends AbstractPrivateKeyEntryDecoder<
         BigInteger q = KeyEntryResolver.decodeBigInt(keyData);
         BigInteger modulus = p.multiply(q);
         if (!Objects.equals(n, modulus)) {
-            log.warn("decodePrivateKey({}) mismatched modulus values: encoded={}, calculated={}",
-                     keyType, n, modulus);
+            log.warn("decodePrivateKey({}) mismatched modulus values: encoded={}, calculated={}", keyType, n, modulus);
         }
 
-        return generatePrivateKey(new RSAPrivateKeySpec(n, d));
+        try {
+            return generatePrivateKey(new RSAPrivateKeySpec(n, d));
+        } finally {
+            // get rid of sensitive data a.s.a.p
+            d = null;
+            inverseQmodP = null;
+            p = null;
+            q = null;
+        }
     }
 
     @Override

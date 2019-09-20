@@ -25,10 +25,10 @@ import java.util.Iterator;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
-import org.apache.sshd.client.session.ClientSession;
 import org.apache.sshd.common.util.GenericUtils;
 
 /**
+ * @author <a href="mailto:dev@mina.apache.org">Apache MINA SSHD Project</a>
  */
 @FunctionalInterface
 public interface PasswordIdentityProvider {
@@ -60,20 +60,6 @@ public interface PasswordIdentityProvider {
      * @return The currently available passwords - ignored if {@code null}
      */
     Iterable<String> loadPasswords();
-
-    /**
-     * Creates a &quot;unified&quot; {@link Iterator} of passwords out of the registered
-     * passwords and the extra available ones as a single iterator of passwords
-     *
-     * @param session The {@link ClientSession} - ignored if {@code null} (i.e., empty
-     * iterator returned)
-     * @return The wrapping iterator
-     * @see ClientSession#getRegisteredIdentities()
-     * @see ClientSession#getPasswordIdentityProvider()
-     */
-    static Iterator<String> iteratorOf(ClientSession session) {
-        return (session == null) ? Collections.<String>emptyIterator() : iteratorOf(session.getRegisteredIdentities(), session.getPasswordIdentityProvider());
-    }
 
     /**
      * Creates a &quot;unified&quot; {@link Iterator} of passwords out of 2 possible
@@ -113,7 +99,8 @@ public interface PasswordIdentityProvider {
      * @return The resolved provider
      * @see #multiProvider(PasswordIdentityProvider...)
      */
-    static PasswordIdentityProvider resolvePasswordIdentityProvider(PasswordIdentityProvider identities, PasswordIdentityProvider passwords) {
+    static PasswordIdentityProvider resolvePasswordIdentityProvider(
+            PasswordIdentityProvider identities, PasswordIdentityProvider passwords) {
         if ((passwords == null) || (identities == passwords)) {
             return identities;
         } else if (identities == null) {
@@ -143,7 +130,7 @@ public interface PasswordIdentityProvider {
      * @return The wrapping provider
      */
     static PasswordIdentityProvider multiProvider(Collection<? extends PasswordIdentityProvider> providers) {
-        return GenericUtils.isEmpty(providers) ? EMPTY_PASSWORDS_PROVIDER : wrap(iterableOf(providers));
+        return GenericUtils.isEmpty(providers) ? EMPTY_PASSWORDS_PROVIDER : wrapPasswords(iterableOf(providers));
     }
 
     /**
@@ -165,8 +152,8 @@ public interface PasswordIdentityProvider {
      * (i.e., returns {@link #EMPTY_PASSWORDS_PROVIDER})
      * @return The provider wrapper
      */
-    static PasswordIdentityProvider wrap(String... passwords) {
-        return wrap(GenericUtils.asList(passwords));
+    static PasswordIdentityProvider wrapPasswords(String... passwords) {
+        return wrapPasswords(GenericUtils.asList(passwords));
     }
 
     /**
@@ -176,7 +163,7 @@ public interface PasswordIdentityProvider {
      * (i.e., returns {@link #EMPTY_PASSWORDS_PROVIDER})
      * @return The provider wrapper
      */
-    static PasswordIdentityProvider wrap(Iterable<String> passwords) {
+    static PasswordIdentityProvider wrapPasswords(Iterable<String> passwords) {
         return (passwords == null) ? EMPTY_PASSWORDS_PROVIDER : () -> passwords;
     }
 }

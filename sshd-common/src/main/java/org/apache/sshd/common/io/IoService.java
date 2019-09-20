@@ -25,7 +25,7 @@ import org.apache.sshd.common.Closeable;
 /**
  * @author <a href="mailto:dev@mina.apache.org">Apache MINA SSHD Project</a>
  */
-public interface IoService extends Closeable {
+public interface IoService extends Closeable, IoServiceEventListenerManager {
     /**
      * Socket reuse address.
      * See {@link java.net.StandardSocketOptions#SO_REUSEADDR}
@@ -34,11 +34,10 @@ public interface IoService extends Closeable {
 
     /**
      * Returns the map of all sessions which are currently managed by this
-     * service.  The key of map is the {@link IoSession#getId() ID} of the
+     * service. The key of map is the {@link IoSession#getId() ID} of the
      * session.
      *
      * @return the sessions. An empty collection if there's no session.
      */
     Map<Long, IoSession> getManagedSessions();
-
 }

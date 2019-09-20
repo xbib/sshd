@@ -25,15 +25,13 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
-import java.util.Optional;
-import java.util.function.Function;
 import java.util.function.Predicate;
-import java.util.function.Supplier;
-import java.util.stream.Stream;
 
 import org.apache.sshd.common.config.keys.FilePasswordProvider;
+import org.apache.sshd.common.config.keys.FilePasswordProviderHolder;
 import org.apache.sshd.common.keyprovider.AbstractKeyPairProvider;
 import org.apache.sshd.common.keyprovider.KeyPairProvider;
+import org.apache.sshd.common.session.SessionContext;
 import org.apache.sshd.common.util.GenericUtils;
 
 /**
@@ -52,18 +50,18 @@ public class ClientIdentitiesWatcher extends AbstractKeyPairProvider implements 
     public ClientIdentitiesWatcher(Collection<? extends Path> paths,
             ClientIdentityLoader loader, FilePasswordProvider provider, boolean strict) {
         this(paths,
-             GenericUtils.supplierOf(Objects.requireNonNull(loader, "No client identity loader")),
-             GenericUtils.supplierOf(Objects.requireNonNull(provider, "No password provider")),
+             ClientIdentityLoaderHolder.loaderHolderOf(Objects.requireNonNull(loader, "No client identity loader")),
+             FilePasswordProviderHolder.providerHolderOf(Objects.requireNonNull(provider, "No password provider")),
              strict);
     }
 
     public ClientIdentitiesWatcher(Collection<? extends Path> paths,
-            Supplier<ClientIdentityLoader> loader, Supplier<FilePasswordProvider> provider) {
+            ClientIdentityLoaderHolder loader, FilePasswordProviderHolder provider) {
         this(paths, loader, provider, true);
     }
 
     public ClientIdentitiesWatcher(Collection<? extends Path> paths,
-            Supplier<ClientIdentityLoader> loader, Supplier<FilePasswordProvider> provider, boolean strict) {
+            ClientIdentityLoaderHolder loader, FilePasswordProviderHolder provider, boolean strict) {
         this(buildProviders(paths, loader, provider, strict));
     }
 
@@ -72,50 +70,31 @@ public class ClientIdentitiesWatcher extends AbstractKeyPairProvider implements 
     }
 
     @Override
-    public Iterable<KeyPair> loadKeys() {
-        return loadKeys(null);
+    public Iterable<KeyPair> loadKeys(SessionContext session) {
+        return loadKeys(session, null);
     }
 
-    protected Iterable<KeyPair> loadKeys(Predicate<? super KeyPair> filter) {
-        return () -> {
-            Stream<KeyPair> stream = safeMap(GenericUtils.stream(providers), this::doGetKeyPair);
-            if (filter != null) {
-                stream = stream.filter(filter);
-            }
-            return stream.iterator();
-        };
+    protected Iterable<KeyPair> loadKeys(SessionContext session, Predicate<? super KeyPair> filter) {
+        return ClientIdentityProvider.lazyKeysLoader(providers, p -> doGetKeyPairs(session, p), filter);
     }
 
-    /**
-     * Performs a mapping operation on the stream, discarding any null values
-     * returned by the mapper.
-     *
-     * @param <U> Original type
-     * @param <V> Mapped type
-     * @param stream Original values stream
-     * @param mapper Mapper to target type
-     * @return Mapped stream
-     */
-    protected <U, V> Stream<V> safeMap(Stream<U> stream, Function<? super U, ? extends V> mapper) {
-        return stream.map(u -> Optional.ofNullable(mapper.apply(u)))
-                .filter(Optional::isPresent)
-                .map(Optional::get);
-    }
-
-    protected KeyPair doGetKeyPair(ClientIdentityProvider p) {
+    protected Iterable<KeyPair> doGetKeyPairs(SessionContext session, ClientIdentityProvider p) {
         try {
-            KeyPair kp = p.getClientIdentity();
+            Iterable<KeyPair> kp = p.getClientIdentities(session);
             if (kp == null) {
                 if (log.isDebugEnabled()) {
                     log.debug("loadKeys({}) no key loaded", p);
                 }
             }
+
             return kp;
         } catch (Throwable e) {
-            log.warn("loadKeys({}) failed ({}) to load key: {}", p, e.getClass().getSimpleName(), e.getMessage());
+            log.warn("loadKeys({}) failed ({}) to load key: {}",
+                p, e.getClass().getSimpleName(), e.getMessage());
             if (log.isDebugEnabled()) {
                 log.debug("loadKeys(" + p + ") key load failure details", e);
             }
+
             return null;
         }
     }
@@ -123,13 +102,14 @@ public class ClientIdentitiesWatcher extends AbstractKeyPairProvider implements 
     public static List<ClientIdentityProvider> buildProviders(
             Collection<? extends Path> paths, ClientIdentityLoader loader, FilePasswordProvider provider, boolean strict) {
         return buildProviders(paths,
-                GenericUtils.supplierOf(Objects.requireNonNull(loader, "No client identity loader")),
-                GenericUtils.supplierOf(Objects.requireNonNull(provider, "No password provider")),
+                ClientIdentityLoaderHolder.loaderHolderOf(Objects.requireNonNull(loader, "No client identity loader")),
+                FilePasswordProviderHolder.providerHolderOf(Objects.requireNonNull(provider, "No password provider")),
                 strict);
     }
 
     public static List<ClientIdentityProvider> buildProviders(
-            Collection<? extends Path> paths, Supplier<ClientIdentityLoader> loader, Supplier<FilePasswordProvider> provider, boolean strict) {
+            Collection<? extends Path> paths, ClientIdentityLoaderHolder loader,
+            FilePasswordProviderHolder provider, boolean strict) {
         if (GenericUtils.isEmpty(paths)) {
             return Collections.emptyList();
         }

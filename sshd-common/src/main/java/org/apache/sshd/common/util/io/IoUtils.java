@@ -49,8 +49,6 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
 import org.apache.sshd.common.util.GenericUtils;
 import org.apache.sshd.common.util.OsUtils;
 
@@ -61,19 +59,18 @@ import org.apache.sshd.common.util.OsUtils;
  */
 public final class IoUtils {
 
-    private static final Logger logger = LogManager.getLogger(IoUtils.class);
-
     public static final OpenOption[] EMPTY_OPEN_OPTIONS = new OpenOption[0];
     public static final CopyOption[] EMPTY_COPY_OPTIONS = new CopyOption[0];
     public static final LinkOption[] EMPTY_LINK_OPTIONS = new LinkOption[0];
     public static final FileAttribute<?>[] EMPTY_FILE_ATTRIBUTES = new FileAttribute<?>[0];
 
-    public static final List<String> WINDOWS_EXECUTABLE_EXTENSIONS = Collections.unmodifiableList(Arrays.asList(".bat", ".exe", ".cmd"));
+    public static final List<String> WINDOWS_EXECUTABLE_EXTENSIONS =
+        Collections.unmodifiableList(Arrays.asList(".bat", ".exe", ".cmd"));
 
     /**
      * Size of preferred work buffer when reading / writing data to / from streams
      */
-    public static final int DEFAULT_COPY_SIZE = 128 * 1024;   //8192;
+    public static final int DEFAULT_COPY_SIZE = 8192;
 
     /**
      * The local O/S line separator
@@ -121,6 +118,10 @@ public final class IoUtils {
         }
     }
 
+    public static long copy(InputStream source, OutputStream sink) throws IOException {
+        return copy(source, sink, DEFAULT_COPY_SIZE);
+    }
+
     public static long copy(InputStream source, OutputStream sink, int bufferSize) throws IOException {
         long nread = 0L;
         byte[] buf = new byte[bufferSize];
@@ -138,12 +139,52 @@ public final class IoUtils {
      *
      * @param closeables The {@link Closeable}s to close
      * @return The <U>first</U> {@link IOException} that occurred during closing
-     * of a resource - if more than one exception occurred, they are added as
-     * suppressed exceptions to the first one
+     * of a resource - {@code null} if not exception. If more than one exception
+     * occurred, they are added as suppressed exceptions to the first one
      * @see Throwable#getSuppressed()
      */
     @SuppressWarnings("ThrowableResultOfMethodCallIgnored")
     public static IOException closeQuietly(Closeable... closeables) {
+        return closeQuietly(GenericUtils.isEmpty(closeables) ? Collections.emptyList() : Arrays.asList(closeables));
+    }
+
+    /**
+     * Closes the specified {@link Closeable} resource
+     *
+     * @param c The resource to close - ignored if {@code null}
+     * @return The thrown {@link IOException} when {@code close()} was
+     * called - {@code null} if no exception was thrown (or no resource
+     * to close to begin with)
+     */
+    @SuppressWarnings("ThrowableResultOfMethodCallIgnored")
+    public static IOException closeQuietly(Closeable c) {
+        if (c != null) {
+            try {
+                c.close();
+            } catch (IOException e) {
+                return e;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Closes a bunch of resources suppressing any {@link IOException}s their
+     * {@link Closeable#close()} method may have thrown
+     *
+     * @param closeables The {@link Closeable}s to close
+     * @return The <U>first</U> {@link IOException} that occurred during closing
+     * of a resource - {@code null} if not exception. If more than one exception
+     * occurred, they are added as suppressed exceptions to the first one
+     * @see Throwable#getSuppressed()
+     */
+    @SuppressWarnings("ThrowableResultOfMethodCallIgnored")
+    public static IOException closeQuietly(Collection<? extends Closeable> closeables) {
+        if (GenericUtils.isEmpty(closeables)) {
+            return null;
+        }
+
         IOException err = null;
         for (Closeable c : closeables) {
             try {
@@ -484,7 +525,7 @@ public final class IoUtils {
 
     public static byte[] toByteArray(InputStream inStream) throws IOException {
         try (ByteArrayOutputStream baos = new ByteArrayOutputStream(DEFAULT_COPY_SIZE)) {
-            copy(inStream, baos, DEFAULT_COPY_SIZE);
+            copy(inStream, baos);
             return baos.toByteArray();
         }
     }

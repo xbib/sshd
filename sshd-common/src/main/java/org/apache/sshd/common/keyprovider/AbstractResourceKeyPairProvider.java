@@ -21,9 +21,9 @@ package org.apache.sshd.common.keyprovider;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.StreamCorruptedException;
 import java.security.GeneralSecurityException;
 import java.security.KeyPair;
-import java.security.PublicKey;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Iterator;
@@ -33,10 +33,13 @@ import java.util.Objects;
 import java.util.TreeMap;
 import java.util.TreeSet;
 
+import org.apache.sshd.common.NamedResource;
 import org.apache.sshd.common.config.keys.FilePasswordProvider;
-import org.apache.sshd.common.config.keys.KeyUtils;
+import org.apache.sshd.common.session.SessionContext;
 import org.apache.sshd.common.util.GenericUtils;
 import org.apache.sshd.common.util.ValidateUtils;
+import org.apache.sshd.common.util.io.resource.IoResource;
+import org.apache.sshd.common.util.io.resource.ResourceStreamProvider;
 import org.apache.sshd.common.util.security.SecurityUtils;
 
 /**
@@ -50,7 +53,7 @@ public abstract class AbstractResourceKeyPairProvider<R> extends AbstractKeyPair
      * practice to have 2 key files that differ from one another only in their
      * case...
      */
-    private final Map<String, KeyPair> cacheMap = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+    private final Map<String, Iterable<KeyPair>> cacheMap = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
 
     protected AbstractResourceKeyPairProvider() {
         super();
@@ -109,79 +112,96 @@ public abstract class AbstractResourceKeyPairProvider<R> extends AbstractKeyPair
         }
     }
 
-    protected Iterable<KeyPair> loadKeys(final Collection<? extends R> resources) {
+    protected Iterable<KeyPair> loadKeys(SessionContext session, Collection<? extends R> resources) {
         if (GenericUtils.isEmpty(resources)) {
             return Collections.emptyList();
         } else {
-            return () -> new KeyPairIterator(resources);
+            return () -> new KeyPairIterator(session, resources);
         }
     }
 
-    protected KeyPair doLoadKey(R resource) throws IOException, GeneralSecurityException {
-        String resourceKey = ValidateUtils.checkNotNullAndNotEmpty(Objects.toString(resource, null), "No resource string value");
-        KeyPair kp;
+    protected IoResource<?> getIoResource(SessionContext session, R resource) {
+        return IoResource.forResource(resource);
+    }
+
+    protected Iterable<KeyPair> doLoadKeys(SessionContext session, R resource)
+            throws IOException, GeneralSecurityException {
+        IoResource<?> ioResource =
+            ValidateUtils.checkNotNull(getIoResource(session, resource), "No I/O resource available for %s", resource);
+        String resourceKey =
+            ValidateUtils.checkNotNullAndNotEmpty(ioResource.getName(), "No resource string value for %s", resource);
+        Iterable<KeyPair> ids;
         synchronized (cacheMap) {
             // check if lucky enough to have already loaded this file
-            kp = cacheMap.get(resourceKey);
+            ids = cacheMap.get(resourceKey);
         }
 
-        if (kp != null) {
+        if (ids != null) {
             if (log.isTraceEnabled()) {
-                PublicKey key = kp.getPublic();
-                log.trace("doLoadKey({}) use cached key {}-{}",
-                          resourceKey, KeyUtils.getKeyType(key), KeyUtils.getFingerPrint(key));
+                log.trace("doLoadKeys({}) using cached identifiers", resourceKey);
             }
-            return kp;
+            return ids;
         }
 
-        kp = doLoadKey(resourceKey, resource, getPasswordFinder());
-        if (kp != null) {
+        ids = doLoadKeys(session, ioResource, resource, getPasswordFinder());
+        if (ids != null) {
             boolean reusedKey;
             synchronized (cacheMap) {
                 // if somebody else beat us to it, use the cached key - just in case file contents changed
                 reusedKey = cacheMap.containsKey(resourceKey);
                 if (reusedKey) {
-                    kp = cacheMap.get(resourceKey);
+                    ids = cacheMap.get(resourceKey);
                 } else {
-                    cacheMap.put(resourceKey, kp);
+                    cacheMap.put(resourceKey, ids);
                 }
             }
 
             if (log.isDebugEnabled()) {
-                PublicKey key = kp.getPublic();
-                log.debug("doLoadKey({}) {} {}-{}",
-                          resourceKey, reusedKey ? "re-loaded" : "loaded",
-                          KeyUtils.getKeyType(key), KeyUtils.getFingerPrint(key));
+                log.debug("doLoadKeys({}) {}", resourceKey, reusedKey ? "re-loaded" : "loaded");
             }
         } else {
             if (log.isDebugEnabled()) {
-                log.debug("doLoadKey({}) no key loaded", resourceKey);
+                log.debug("doLoadKeys({}) no key loaded", resourceKey);
             }
         }
 
-        return kp;
+        return ids;
     }
 
-    protected KeyPair doLoadKey(String resourceKey, R resource, FilePasswordProvider provider) throws IOException, GeneralSecurityException {
-        try (InputStream inputStream = openKeyPairResource(resourceKey, resource)) {
-            return doLoadKey(resourceKey, inputStream, provider);
+    protected Iterable<KeyPair> doLoadKeys(
+            SessionContext session, NamedResource resourceKey, R resource, FilePasswordProvider provider)
+                throws IOException, GeneralSecurityException {
+        try (InputStream inputStream = openKeyPairResource(session, resourceKey, resource)) {
+            return doLoadKeys(session, resourceKey, inputStream, provider);
         }
     }
 
-    protected abstract InputStream openKeyPairResource(String resourceKey, R resource) throws IOException;
+    protected InputStream openKeyPairResource(
+            SessionContext session, NamedResource resourceKey, R resource)
+                throws IOException {
+        if (resourceKey instanceof ResourceStreamProvider) {
+            return ((ResourceStreamProvider) resourceKey).openInputStream();
+        }
 
-    protected KeyPair doLoadKey(String resourceKey, InputStream inputStream, FilePasswordProvider provider)
-            throws IOException, GeneralSecurityException {
-        return SecurityUtils.loadKeyPairIdentity(resourceKey, inputStream, provider);
+        throw new StreamCorruptedException("Cannot open resource data for " + resource);
+    }
+
+    protected Iterable<KeyPair> doLoadKeys(
+            SessionContext session, NamedResource resourceKey, InputStream inputStream, FilePasswordProvider provider)
+                throws IOException, GeneralSecurityException {
+        return SecurityUtils.loadKeyPairIdentities(session, resourceKey, inputStream, provider);
     }
 
     protected class KeyPairIterator implements Iterator<KeyPair> {
+        protected final SessionContext session;
         private final Iterator<? extends R> iterator;
+        private Iterator<KeyPair> currentIdentities;
         private KeyPair nextKeyPair;
         private boolean nextKeyPairSet;
 
-        protected KeyPairIterator(Collection<? extends R> resources) {
-            iterator = resources.iterator();
+        protected KeyPairIterator(SessionContext session, Collection<? extends R> resources) {
+            this.session = session;
+            this.iterator = resources.iterator();
         }
 
         @Override
@@ -207,14 +227,23 @@ public abstract class AbstractResourceKeyPairProvider<R> extends AbstractKeyPair
 
         @SuppressWarnings("synthetic-access")
         private boolean setNextObject() {
+            nextKeyPair = KeyIdentityProvider.exhaustCurrentIdentities(currentIdentities);
+            if (nextKeyPair != null) {
+                nextKeyPairSet = true;
+                return true;
+            }
+
+            boolean debugEnabled = log.isDebugEnabled();
             while (iterator.hasNext()) {
                 R r = iterator.next();
                 try {
-                    nextKeyPair = doLoadKey(r);
+                    Iterable<KeyPair> ids = doLoadKeys(session, r);
+                    currentIdentities = (ids == null) ? null : ids.iterator();
+                    nextKeyPair = KeyIdentityProvider.exhaustCurrentIdentities(currentIdentities);
                 } catch (Throwable e) {
                     log.warn("Failed (" + e.getClass().getSimpleName() + ")"
                            + " to load key resource=" + r + ": " + e.getMessage());
-                    if (log.isDebugEnabled()) {
+                    if (debugEnabled) {
                         log.debug("Key resource=" + r + " load failure details", e);
                     }
                     nextKeyPair = null;

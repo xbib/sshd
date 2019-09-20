@@ -43,7 +43,8 @@ public abstract class AbstractOpenSshHostKeysHandler extends AbstractConnectionS
         this(request, BufferPublicKeyParser.DEFAULT);
     }
 
-    protected AbstractOpenSshHostKeysHandler(String request, BufferPublicKeyParser<? extends PublicKey> parser) {
+    protected AbstractOpenSshHostKeysHandler(
+            String request, BufferPublicKeyParser<? extends PublicKey> parser) {
         this.request = ValidateUtils.checkNotNullAndNotEmpty(request, "No request identifier");
         this.parser = Objects.requireNonNull(parser, "No public keys extractor");
     }
@@ -57,7 +58,9 @@ public abstract class AbstractOpenSshHostKeysHandler extends AbstractConnectionS
     }
 
     @Override
-    public Result process(ConnectionService connectionService, String request, boolean wantReply, Buffer buffer) throws Exception {
+    public Result process(
+            ConnectionService connectionService, String request, boolean wantReply, Buffer buffer)
+                throws Exception {
         String expected = getRequestName();
         if (!expected.equals(request)) {
             return super.process(connectionService, request, wantReply, buffer);
@@ -66,11 +69,12 @@ public abstract class AbstractOpenSshHostKeysHandler extends AbstractConnectionS
         Collection<PublicKey> keys = new LinkedList<>();
         BufferPublicKeyParser<? extends PublicKey> p = getPublicKeysParser();
         if (p != null) {
+            boolean debugEnabled = log.isDebugEnabled();
             while (buffer.available() > 0) {
                 PublicKey key = buffer.getPublicKey(p);
-                if (log.isDebugEnabled()) {
+                if (debugEnabled) {
                     log.debug("process({})[{}] key type={}, fingerprint={}",
-                              connectionService, request, KeyUtils.getKeyType(key), KeyUtils.getFingerPrint(key));
+                          connectionService, request, KeyUtils.getKeyType(key), KeyUtils.getFingerPrint(key));
                 }
                 if (key != null) {
                     keys.add(key);
@@ -81,7 +85,9 @@ public abstract class AbstractOpenSshHostKeysHandler extends AbstractConnectionS
         return handleHostKeys(connectionService.getSession(), keys, wantReply, buffer);
     }
 
-    protected abstract Result handleHostKeys(Session session, Collection<? extends PublicKey> keys, boolean wantReply, Buffer buffer) throws Exception;
+    protected abstract Result handleHostKeys(
+        Session session, Collection<? extends PublicKey> keys, boolean wantReply, Buffer buffer)
+            throws Exception;
 
     @Override
     public String toString() {

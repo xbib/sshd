@@ -39,20 +39,20 @@ import java.util.Objects;
 import java.util.TreeSet;
 import java.util.concurrent.atomic.AtomicReference;
 
-import org.apache.sshd.client.config.hosts.HostPatternsHolder;
 import org.apache.sshd.client.config.hosts.KnownHostEntry;
 import org.apache.sshd.client.config.hosts.KnownHostHashValue;
 import org.apache.sshd.client.session.ClientSession;
 import org.apache.sshd.common.Factory;
 import org.apache.sshd.common.FactoryManager;
 import org.apache.sshd.common.NamedFactory;
-import org.apache.sshd.common.config.SshConfigFileReader;
+import org.apache.sshd.common.config.ConfigFileReaderSupport;
 import org.apache.sshd.common.config.keys.AuthorizedKeyEntry;
 import org.apache.sshd.common.config.keys.KeyUtils;
 import org.apache.sshd.common.config.keys.PublicKeyEntry;
 import org.apache.sshd.common.config.keys.PublicKeyEntryResolver;
 import org.apache.sshd.common.mac.Mac;
 import org.apache.sshd.common.random.Random;
+import org.apache.sshd.common.session.SessionContext;
 import org.apache.sshd.common.util.GenericUtils;
 import org.apache.sshd.common.util.ValidateUtils;
 import org.apache.sshd.common.util.io.IoUtils;
@@ -160,7 +160,7 @@ public class KnownHostsServerKeyVerifier
             if (checkReloadRequired()) {
                 Path file = getPath();
                 if (exists()) {
-                    knownHosts = reloadKnownHosts(file);
+                    knownHosts = reloadKnownHosts(clientSession, file);
                 } else {
                     if (log.isDebugEnabled()) {
                         log.debug("verifyServerKey({})[{}] missing known hosts file {}",
@@ -187,14 +187,17 @@ public class KnownHostsServerKeyVerifier
     }
 
     /**
+     * @param session The {@link ClientSession} that triggered this request
      * @param file The {@link Path} to reload from
      * @return A {@link List} of the loaded {@link HostEntryPair}s - may be {@code null}/empty
      * @throws IOException If failed to parse the file
      * @throws GeneralSecurityException If failed to resolve the encoded public keys
      */
-    protected List<HostEntryPair> reloadKnownHosts(Path file) throws IOException, GeneralSecurityException {
+    protected List<HostEntryPair> reloadKnownHosts(ClientSession session, Path file)
+            throws IOException, GeneralSecurityException {
         Collection<KnownHostEntry> entries = KnownHostEntry.readKnownHostEntries(file);
-        if (log.isDebugEnabled()) {
+        boolean debugEnabled = log.isDebugEnabled();
+        if (debugEnabled) {
             log.debug("reloadKnownHosts({}) loaded {} entries", file, entries.size());
         }
         updateReloadAttributes();
@@ -207,14 +210,14 @@ public class KnownHostsServerKeyVerifier
         PublicKeyEntryResolver resolver = getFallbackPublicKeyEntryResolver();
         for (KnownHostEntry entry : entries) {
             try {
-                PublicKey key = resolveHostKey(entry, resolver);
+                PublicKey key = resolveHostKey(session, entry, resolver);
                 if (key != null) {
                     keys.add(new HostEntryPair(entry, key));
                 }
             } catch (Throwable t) {
                 log.warn("reloadKnownHosts({}) failed ({}) to load key of {}: {}",
                          file, t.getClass().getSimpleName(), entry, t.getMessage());
-                if (log.isDebugEnabled()) {
+                if (debugEnabled) {
                     log.debug("reloadKnownHosts(" + file + ") key=" + entry + " load failure details", t);
                 }
             }
@@ -226,6 +229,7 @@ public class KnownHostsServerKeyVerifier
     /**
      * Recover the associated public key from a known host entry
      *
+     * @param session The {@link ClientSession} that triggered this request
      * @param entry The {@link KnownHostEntry} - ignored if {@code null}
      * @param resolver The {@link PublicKeyEntryResolver} to use if immediate
      * - decoding does not work - ignored if {@code null}
@@ -233,16 +237,18 @@ public class KnownHostsServerKeyVerifier
      * @throws IOException If failed to decode the key
      * @throws GeneralSecurityException If failed to generate the key
      * @see #getFallbackPublicKeyEntryResolver()
-     * @see AuthorizedKeyEntry#resolvePublicKey(PublicKeyEntryResolver)
+     * @see AuthorizedKeyEntry#resolvePublicKey(SessionContext, PublicKeyEntryResolver)
      */
-    protected PublicKey resolveHostKey(KnownHostEntry entry, PublicKeyEntryResolver resolver)
-            throws IOException, GeneralSecurityException {
+    protected PublicKey resolveHostKey(
+            ClientSession session, KnownHostEntry entry, PublicKeyEntryResolver resolver)
+                throws IOException, GeneralSecurityException {
         if (entry == null) {
             return null;
         }
 
-        AuthorizedKeyEntry authEntry = ValidateUtils.checkNotNull(entry.getKeyEntry(), "No key extracted from %s", entry);
-        PublicKey key = authEntry.resolvePublicKey(resolver);
+        AuthorizedKeyEntry authEntry =
+            ValidateUtils.checkNotNull(entry.getKeyEntry(), "No key extracted from %s", entry);
+        PublicKey key = authEntry.resolvePublicKey(session, resolver);
         if (log.isDebugEnabled()) {
             log.debug("resolveHostKey({}) loaded {}-{}", entry, KeyUtils.getKeyType(key), KeyUtils.getFingerPrint(key));
         }
@@ -313,14 +319,15 @@ public class KnownHostsServerKeyVerifier
     protected void updateModifiedServerKey(
             ClientSession clientSession, SocketAddress remoteAddress, HostEntryPair match, PublicKey actual,
             Path file, Collection<HostEntryPair> knownHosts)
-                    throws Exception {
+                throws Exception {
         KnownHostEntry entry = match.getHostEntry();
         String matchLine = ValidateUtils.checkNotNullAndNotEmpty(entry.getConfigLine(), "No entry config line");
-        String newLine = prepareModifiedServerKeyLine(clientSession, remoteAddress, entry, matchLine, match.getServerKey(), actual);
+        String newLine = prepareModifiedServerKeyLine(
+            clientSession, remoteAddress, entry, matchLine, match.getServerKey(), actual);
         if (GenericUtils.isEmpty(newLine)) {
             if (log.isDebugEnabled()) {
                 log.debug("updateModifiedServerKey({})[{}] no replacement generated for {}",
-                          clientSession, remoteAddress, matchLine);
+                      clientSession, remoteAddress, matchLine);
             }
             return;
         }
@@ -328,7 +335,7 @@ public class KnownHostsServerKeyVerifier
         if (matchLine.equals(newLine)) {
             if (log.isDebugEnabled()) {
                 log.debug("updateModifiedServerKey({})[{}] unmodified updated line for {}",
-                          clientSession, remoteAddress, matchLine);
+                      clientSession, remoteAddress, matchLine);
             }
             return;
         }
@@ -349,7 +356,7 @@ public class KnownHostsServerKeyVerifier
                         continue;
                     }
 
-                    int pos = line.indexOf(SshConfigFileReader.COMMENT_CHAR);
+                    int pos = line.indexOf(ConfigFileReaderSupport.COMMENT_CHAR);
                     if (pos == 0) {
                         lines.add(line);
                         continue;
@@ -448,7 +455,7 @@ public class KnownHostsServerKeyVerifier
             PublicKey serverKey, Path file, Collection<HostEntryPair> knownHosts, Throwable reason) {
         // NOTE !!! this may mean the file is corrupted, but it can be recovered from the known hosts
         log.warn("acceptKnownHostEntries({})[{}] failed ({}) to update modified server key of {}: {}",
-                 clientSession, remoteAddress, reason.getClass().getSimpleName(), match, reason.getMessage());
+             clientSession, remoteAddress, reason.getClass().getSimpleName(), match, reason.getMessage());
         if (log.isDebugEnabled()) {
             log.debug("acceptKnownHostEntries(" + clientSession + ")[" + remoteAddress + "]"
                     + " modified key update failure details", reason);
@@ -492,7 +499,8 @@ public class KnownHostsServerKeyVerifier
         }
 
         Collection<SshdSocketAddress> candidates = resolveHostNetworkIdentities(clientSession, remoteAddress);
-        if (log.isDebugEnabled()) {
+        boolean debugEnabled = log.isDebugEnabled();
+        if (debugEnabled) {
             log.debug("findKnownHostEntry({})[{}] host network identities: {}",
                       clientSession, remoteAddress, candidates);
         }
@@ -506,7 +514,7 @@ public class KnownHostsServerKeyVerifier
             for (SshdSocketAddress host : candidates) {
                 try {
                     if (entry.isHostMatch(host.getHostName(), host.getPort())) {
-                        if (log.isDebugEnabled()) {
+                        if (debugEnabled) {
                             log.debug("findKnownHostEntry({})[{}] matched host={} for entry={}",
                                        clientSession, remoteAddress, host, entry);
                         }
@@ -516,7 +524,7 @@ public class KnownHostsServerKeyVerifier
                     log.warn("findKnownHostEntry({})[{}] failed ({}) to check host={} for entry={}: {}",
                              clientSession, remoteAddress, e.getClass().getSimpleName(),
                              host, entry.getConfigLine(), e.getMessage());
-                    if (log.isDebugEnabled()) {
+                    if (debugEnabled) {
                         log.debug("findKnownHostEntry(" + clientSession + ") host=" + host + ", entry=" + entry + " match failure details", e);
                     }
                 }
@@ -561,7 +569,7 @@ public class KnownHostsServerKeyVerifier
     protected boolean acceptUnknownHostKey(ClientSession clientSession, SocketAddress remoteAddress, PublicKey serverKey) {
         if (log.isDebugEnabled()) {
             log.debug("acceptUnknownHostKey({}) host={}, key={}",
-                      clientSession, remoteAddress, KeyUtils.getFingerPrint(serverKey));
+                  clientSession, remoteAddress, KeyUtils.getFingerPrint(serverKey));
         }
 
         if (delegate.verifyServerKey(clientSession, remoteAddress, serverKey)) {
@@ -595,9 +603,9 @@ public class KnownHostsServerKeyVerifier
     protected void handleKnownHostsFileUpdateFailure(ClientSession clientSession, SocketAddress remoteAddress, PublicKey serverKey,
             Path file, Collection<HostEntryPair> knownHosts, Throwable reason) {
         log.warn("handleKnownHostsFileUpdateFailure({})[{}] failed ({}) to update key={}-{} in {}: {}",
-                 clientSession, remoteAddress, reason.getClass().getSimpleName(),
-                 KeyUtils.getKeyType(serverKey), KeyUtils.getFingerPrint(serverKey),
-                 file, reason.getMessage());
+             clientSession, remoteAddress, reason.getClass().getSimpleName(),
+             KeyUtils.getKeyType(serverKey), KeyUtils.getFingerPrint(serverKey),
+             file, reason.getMessage());
         if (log.isDebugEnabled()) {
             log.debug("handleKnownHostsFileUpdateFailure(" + clientSession + ")[" + remoteAddress + "]"
                     + " file update failure details", reason);
@@ -622,13 +630,14 @@ public class KnownHostsServerKeyVerifier
      * @see #resetReloadAttributes()
      */
     protected KnownHostEntry updateKnownHostsFile(
-            ClientSession clientSession, SocketAddress remoteAddress, PublicKey serverKey, Path file, Collection<HostEntryPair> knownHosts)
-                    throws Exception {
+            ClientSession clientSession, SocketAddress remoteAddress, PublicKey serverKey,
+            Path file, Collection<HostEntryPair> knownHosts)
+                throws Exception {
         KnownHostEntry entry = prepareKnownHostEntry(clientSession, remoteAddress, serverKey);
         if (entry == null) {
             if (log.isDebugEnabled()) {
                 log.debug("updateKnownHostsFile({})[{}] no entry generated for key={}",
-                          clientSession, remoteAddress, KeyUtils.getFingerPrint(serverKey));
+                      clientSession, remoteAddress, KeyUtils.getFingerPrint(serverKey));
             }
 
             return null;
@@ -639,7 +648,9 @@ public class KnownHostsServerKeyVerifier
         boolean reuseExisting = Files.exists(file) && (Files.size(file) > 0);
         byte[] eolBytes = IoUtils.getEOLBytes();
         synchronized (updateLock) {
-            try (OutputStream output = reuseExisting ? Files.newOutputStream(file, StandardOpenOption.APPEND) : Files.newOutputStream(file)) {
+            try (OutputStream output = reuseExisting
+                    ? Files.newOutputStream(file, StandardOpenOption.APPEND)
+                    : Files.newOutputStream(file)) {
                 if (reuseExisting) {
                     output.write(eolBytes);    // separate from previous lines
                 }
@@ -669,8 +680,11 @@ public class KnownHostsServerKeyVerifier
      * @see #resolveHostNetworkIdentities(ClientSession, SocketAddress)
      * @see KnownHostEntry#getConfigLine()
      */
-    protected KnownHostEntry prepareKnownHostEntry(ClientSession clientSession, SocketAddress remoteAddress, PublicKey serverKey) throws Exception {
-        Collection<SshdSocketAddress> patterns = resolveHostNetworkIdentities(clientSession, remoteAddress);
+    protected KnownHostEntry prepareKnownHostEntry(
+            ClientSession clientSession, SocketAddress remoteAddress, PublicKey serverKey)
+                throws Exception {
+        Collection<SshdSocketAddress> patterns =
+            resolveHostNetworkIdentities(clientSession, remoteAddress);
         if (GenericUtils.isEmpty(patterns)) {
             return null;
         }
@@ -682,13 +696,14 @@ public class KnownHostsServerKeyVerifier
                 sb.append(',');
             }
 
-            NamedFactory<Mac> digester = getHostValueDigester(clientSession, remoteAddress, hostIdentity);
+            NamedFactory<Mac> digester =
+                getHostValueDigester(clientSession, remoteAddress, hostIdentity);
             if (digester != null) {
                 if (rnd == null) {
                     FactoryManager manager =
-                            Objects.requireNonNull(clientSession.getFactoryManager(), "No factory manager");
+                        Objects.requireNonNull(clientSession.getFactoryManager(), "No factory manager");
                     Factory<? extends Random> factory =
-                            Objects.requireNonNull(manager.getRandomFactory(), "No random factory");
+                        Objects.requireNonNull(manager.getRandomFactory(), "No random factory");
                     rnd = Objects.requireNonNull(factory.create(), "No randomizer created");
                 }
 
@@ -697,20 +712,12 @@ public class KnownHostsServerKeyVerifier
                 byte[] salt = new byte[blockSize];
                 rnd.fill(salt);
 
-                byte[] digestValue = KnownHostHashValue.calculateHashValue(hostIdentity.getHostName(), mac, salt);
+                byte[] digestValue =
+                    KnownHostHashValue.calculateHashValue(
+                        hostIdentity.getHostName(), hostIdentity.getPort(), mac, salt);
                 KnownHostHashValue.append(sb, digester, salt, digestValue);
             } else {
-                int portValue = hostIdentity.getPort();
-                boolean nonDefaultPort = (portValue > 0) && (portValue != SshConfigFileReader.DEFAULT_PORT);
-                if (nonDefaultPort) {
-                    sb.append(HostPatternsHolder.NON_STANDARD_PORT_PATTERN_ENCLOSURE_START_DELIM);
-                }
-                sb.append(hostIdentity.getHostName());
-                if (nonDefaultPort) {
-                    sb.append(HostPatternsHolder.NON_STANDARD_PORT_PATTERN_ENCLOSURE_END_DELIM);
-                    sb.append(HostPatternsHolder.PORT_VALUE_DELIMITER);
-                    sb.append(portValue);
-                }
+                KnownHostHashValue.appendHostPattern(sb, hostIdentity.getHostName(), hostIdentity.getPort());
             }
         }
 
@@ -728,7 +735,8 @@ public class KnownHostsServerKeyVerifier
      * @param hostIdentity The entry's host name/address
      * @return The digester {@link NamedFactory} - {@code null} if no hashing is to be made
      */
-    protected NamedFactory<Mac> getHostValueDigester(ClientSession clientSession, SocketAddress remoteAddress, SshdSocketAddress hostIdentity) {
+    protected NamedFactory<Mac> getHostValueDigester(
+            ClientSession clientSession, SocketAddress remoteAddress, SshdSocketAddress hostIdentity) {
         return null;
     }
 

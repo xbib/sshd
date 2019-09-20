@@ -31,7 +31,6 @@ import java.util.Map;
 import java.util.TreeMap;
 import java.util.function.Function;
 
-import org.apache.sshd.client.SshClient;
 import org.apache.sshd.common.NamedResource;
 import org.apache.sshd.common.config.keys.BuiltinIdentities;
 import org.apache.sshd.common.config.keys.FilePasswordProvider;
@@ -39,6 +38,7 @@ import org.apache.sshd.common.config.keys.IdentityUtils;
 import org.apache.sshd.common.config.keys.KeyUtils;
 import org.apache.sshd.common.config.keys.PublicKeyEntry;
 import org.apache.sshd.common.keyprovider.KeyPairProvider;
+import org.apache.sshd.common.session.SessionContext;
 import org.apache.sshd.common.util.GenericUtils;
 import org.apache.sshd.common.util.ValidateUtils;
 import org.apache.sshd.common.util.io.FileInfoExtractor;
@@ -96,69 +96,13 @@ public final class ClientIdentity {
     }
 
     /**
-     * @param <C>           The generic client class
-     * @param client        The {@link SshClient} to updated
      * @param strict        If {@code true} then files that do not have the required
      *                      access rights are excluded from consideration
      * @param supportedOnly If {@code true} then ignore identities that are not
      *                      supported internally
      * @param provider      A {@link FilePasswordProvider} - may be {@code null}
      *                      if the loaded keys are <U>guaranteed</U> not to be encrypted. The argument
-     *                      to {@link FilePasswordProvider#getPassword(String)} is the path of the
-     *                      file whose key is to be loaded
-     * @param options       The {@link LinkOption}s to apply when checking
-     *                      for existence
-     * @return The updated {@code client} instance - provided a non-{@code null}
-     * {@link KeyPairProvider} was generated
-     * @throws IOException              If failed to access the file system
-     * @throws GeneralSecurityException If failed to load the keys
-     * @see #setKeyPairProvider(SshClient, Path, boolean, boolean, FilePasswordProvider, LinkOption...)
-     */
-    public static <C extends SshClient> C setKeyPairProvider(
-            C client, boolean strict, boolean supportedOnly, FilePasswordProvider provider, LinkOption... options)
-            throws IOException, GeneralSecurityException {
-        return setKeyPairProvider(client, PublicKeyEntry.getDefaultKeysFolderPath(), strict, supportedOnly, provider, options);
-    }
-
-    /**
-     * @param <C>           The generic client class
-     * @param client        The {@link SshClient} to updated
-     * @param dir           The folder to scan for the built-in identities
-     * @param strict        If {@code true} then files that do not have the required
-     *                      access rights are excluded from consideration
-     * @param supportedOnly If {@code true} then ignore identities that are not
-     *                      supported internally
-     * @param provider      A {@link FilePasswordProvider} - may be {@code null}
-     *                      if the loaded keys are <U>guaranteed</U> not to be encrypted. The argument
-     *                      to {@link FilePasswordProvider#getPassword(String)} is the path of the
-     *                      file whose key is to be loaded
-     * @param options       The {@link LinkOption}s to apply when checking
-     *                      for existence
-     * @return The updated {@code client} instance - provided a non-{@code null}
-     * {@link KeyPairProvider} was generated
-     * @throws IOException              If failed to access the file system
-     * @throws GeneralSecurityException If failed to load the keys
-     * @see #loadDefaultKeyPairProvider(Path, boolean, boolean, FilePasswordProvider, LinkOption...)
-     */
-    public static <C extends SshClient> C setKeyPairProvider(
-            C client, Path dir, boolean strict, boolean supportedOnly, FilePasswordProvider provider, LinkOption... options)
-            throws IOException, GeneralSecurityException {
-        KeyPairProvider kpp = loadDefaultKeyPairProvider(dir, strict, supportedOnly, provider, options);
-        if (kpp != null) {
-            client.setKeyPairProvider(kpp);
-        }
-
-        return client;
-    }
-
-    /**
-     * @param strict        If {@code true} then files that do not have the required
-     *                      access rights are excluded from consideration
-     * @param supportedOnly If {@code true} then ignore identities that are not
-     *                      supported internally
-     * @param provider      A {@link FilePasswordProvider} - may be {@code null}
-     *                      if the loaded keys are <U>guaranteed</U> not to be encrypted. The argument
-     *                      to {@link FilePasswordProvider#getPassword(String)} is the path of the
+     *                      to {@code FilePasswordProvider#getPassword} is the path of the
      *                      file whose key is to be loaded
      * @param options       The {@link LinkOption}s to apply when checking
      *                      for existence
@@ -171,7 +115,7 @@ public final class ClientIdentity {
      */
     public static KeyPairProvider loadDefaultKeyPairProvider(
             boolean strict, boolean supportedOnly, FilePasswordProvider provider, LinkOption... options)
-            throws IOException, GeneralSecurityException {
+                throws IOException, GeneralSecurityException {
         return loadDefaultKeyPairProvider(PublicKeyEntry.getDefaultKeysFolderPath(), strict, supportedOnly, provider, options);
     }
 
@@ -183,7 +127,7 @@ public final class ClientIdentity {
      *                      supported internally
      * @param provider      A {@link FilePasswordProvider} - may be {@code null}
      *                      if the loaded keys are <U>guaranteed</U> not to be encrypted. The argument
-     *                      to {@link FilePasswordProvider#getPassword(String)} is the path of the
+     *                      to {@code FilePasswordProvider#getPassword} is the path of the
      *                      file whose key is to be loaded
      * @param options       The {@link LinkOption}s to apply when checking
      *                      for existence
@@ -196,7 +140,7 @@ public final class ClientIdentity {
      */
     public static KeyPairProvider loadDefaultKeyPairProvider(
             Path dir, boolean strict, boolean supportedOnly, FilePasswordProvider provider, LinkOption... options)
-            throws IOException, GeneralSecurityException {
+                throws IOException, GeneralSecurityException {
         Map<String, KeyPair> ids = loadDefaultIdentities(dir, strict, provider, options);
         return IdentityUtils.createKeyPairProvider(ids, supportedOnly);
     }
@@ -206,7 +150,7 @@ public final class ClientIdentity {
      *                 access rights are excluded from consideration
      * @param provider A {@link FilePasswordProvider} - may be {@code null}
      *                 if the loaded keys are <U>guaranteed</U> not to be encrypted. The argument
-     *                 to {@link FilePasswordProvider#getPassword(String)} is the path of the
+     *                 to {@code FilePasswordProvider#getPassword} is the path of the
      *                 file whose key is to be loaded
      * @param options  The {@link LinkOption}s to apply when checking
      *                 for existence
@@ -217,8 +161,9 @@ public final class ClientIdentity {
      * @see PublicKeyEntry#getDefaultKeysFolderPath()
      * @see #loadDefaultIdentities(Path, boolean, FilePasswordProvider, LinkOption...)
      */
-    public static Map<String, KeyPair> loadDefaultIdentities(boolean strict, FilePasswordProvider provider, LinkOption... options)
-            throws IOException, GeneralSecurityException {
+    public static Map<String, KeyPair> loadDefaultIdentities(
+            boolean strict, FilePasswordProvider provider, LinkOption... options)
+                throws IOException, GeneralSecurityException {
         return loadDefaultIdentities(PublicKeyEntry.getDefaultKeysFolderPath(), strict, provider, options);
     }
 
@@ -228,7 +173,7 @@ public final class ClientIdentity {
      *                 access rights are excluded from consideration
      * @param provider A {@link FilePasswordProvider} - may be {@code null}
      *                 if the loaded keys are <U>guaranteed</U> not to be encrypted. The argument
-     *                 to {@link FilePasswordProvider#getPassword(String)} is the path of the
+     *                 to {@code FilePasswordProvider#getPassword} is the path of the
      *                 file whose key is to be loaded
      * @param options  The {@link LinkOption}s to apply when checking
      *                 for existence
@@ -236,17 +181,19 @@ public final class ClientIdentity {
      * <U>insensitive</U>), value=the {@link KeyPair} of the identity
      * @throws IOException              If failed to access the file system
      * @throws GeneralSecurityException If failed to load the keys
-     * @see #loadIdentities(Path, boolean, Collection, Function, FilePasswordProvider, LinkOption...)
      * @see BuiltinIdentities
      */
-    public static Map<String, KeyPair> loadDefaultIdentities(Path dir, boolean strict, FilePasswordProvider provider, LinkOption... options)
-            throws IOException, GeneralSecurityException {
-        return loadIdentities(dir, strict, BuiltinIdentities.NAMES, ID_GENERATOR, provider, options);
+    public static Map<String, KeyPair> loadDefaultIdentities(
+            Path dir, boolean strict, FilePasswordProvider provider, LinkOption... options)
+                throws IOException, GeneralSecurityException {
+        return loadIdentities(null, dir, strict, BuiltinIdentities.NAMES, ID_GENERATOR, provider, options);
     }
 
     /**
      * Scans a folder and loads all available identity files
      *
+     * @param session The {@link SessionContext} for invoking this load command - may
+     * be {@code null} if not invoked within a session context (e.g., offline tool or session unknown).
      * @param dir         The {@link Path} of the folder to scan - ignored if not exists
      * @param strict      If {@code true} then files that do not have the required
      *                    access rights are excluded from consideration
@@ -255,7 +202,7 @@ public final class ClientIdentity {
      *                    holding the specified type
      * @param provider    A {@link FilePasswordProvider} - may be {@code null}
      *                    if the loaded keys are <U>guaranteed</U> not to be encrypted. The argument
-     *                    to {@link FilePasswordProvider#getPassword(String)} is the path of the
+     *                    to {@code FilePasswordProvider#getPassword} is the path of the
      *                    file whose key is to be loaded
      * @param options     The {@link LinkOption}s to apply when checking
      *                    for existence
@@ -263,14 +210,14 @@ public final class ClientIdentity {
      * <U>insensitive</U>), value=the {@link KeyPair} of the identity
      * @throws IOException              If failed to access the file system
      * @throws GeneralSecurityException If failed to load the keys
-     * @see #scanIdentitiesFolder(Path, boolean, Collection, Function, LinkOption...)
-     * @see IdentityUtils#loadIdentities(Map, FilePasswordProvider, java.nio.file.OpenOption...)
      */
     public static Map<String, KeyPair> loadIdentities(
-            Path dir, boolean strict, Collection<String> types, Function<String, String> idGenerator, FilePasswordProvider provider, LinkOption... options)
+            SessionContext session, Path dir, boolean strict,
+            Collection<String> types, Function<? super String, String> idGenerator,
+            FilePasswordProvider provider, LinkOption... options)
             throws IOException, GeneralSecurityException {
         Map<String, Path> paths = scanIdentitiesFolder(dir, strict, types, idGenerator, options);
-        return IdentityUtils.loadIdentities(paths, provider, IoUtils.EMPTY_OPEN_OPTIONS);
+        return IdentityUtils.loadIdentities(session, paths, provider, IoUtils.EMPTY_OPEN_OPTIONS);
     }
 
     /**
@@ -290,8 +237,8 @@ public final class ClientIdentity {
      * @see KeyUtils#validateStrictKeyFilePermissions(Path, LinkOption...)
      */
     public static Map<String, Path> scanIdentitiesFolder(
-            Path dir, boolean strict, Collection<String> types, Function<String, String> idGenerator, LinkOption... options)
-            throws IOException {
+            Path dir, boolean strict, Collection<String> types, Function<? super String, String> idGenerator, LinkOption... options)
+                throws IOException {
         if (GenericUtils.isEmpty(types)) {
             return Collections.emptyMap();
         }

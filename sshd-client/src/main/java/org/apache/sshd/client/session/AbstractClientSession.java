@@ -31,27 +31,24 @@ import java.util.concurrent.CopyOnWriteArrayList;
 
 import org.apache.sshd.client.ClientFactoryManager;
 import org.apache.sshd.client.auth.AuthenticationIdentitiesProvider;
-import org.apache.sshd.client.auth.UserAuth;
+import org.apache.sshd.client.auth.UserAuthFactory;
 import org.apache.sshd.client.auth.keyboard.UserInteraction;
 import org.apache.sshd.client.auth.password.PasswordIdentityProvider;
 import org.apache.sshd.client.channel.ChannelDirectTcpip;
 import org.apache.sshd.client.channel.ChannelExec;
 import org.apache.sshd.client.channel.ChannelShell;
 import org.apache.sshd.client.channel.ChannelSubsystem;
-import org.apache.sshd.common.channel.ClientChannel;
+import org.apache.sshd.client.channel.ClientChannel;
 import org.apache.sshd.client.keyverifier.ServerKeyVerifier;
-import org.apache.sshd.client.scp.DefaultScpClient;
-import org.apache.sshd.client.scp.ScpClient;
-import org.apache.sshd.client.subsystem.sftp.SftpClient;
-import org.apache.sshd.client.subsystem.sftp.SftpClientFactory;
-import org.apache.sshd.client.subsystem.sftp.SftpVersionSelector;
+import org.apache.sshd.common.AttributeRepository;
 import org.apache.sshd.common.FactoryManager;
-import org.apache.sshd.common.NamedFactory;
 import org.apache.sshd.common.NamedResource;
+import org.apache.sshd.common.PropertyResolverUtils;
 import org.apache.sshd.common.RuntimeSshException;
 import org.apache.sshd.common.SshConstants;
 import org.apache.sshd.common.SshException;
 import org.apache.sshd.common.channel.Channel;
+import org.apache.sshd.common.channel.PtyChannelConfigurationHolder;
 import org.apache.sshd.common.cipher.BuiltinCiphers;
 import org.apache.sshd.common.cipher.CipherNone;
 import org.apache.sshd.common.config.keys.KeyUtils;
@@ -62,10 +59,12 @@ import org.apache.sshd.common.io.IoSession;
 import org.apache.sshd.common.io.IoWriteFuture;
 import org.apache.sshd.common.kex.KexProposalOption;
 import org.apache.sshd.common.kex.KexState;
-import org.apache.sshd.common.scp.ScpFileOpener;
-import org.apache.sshd.common.scp.ScpTransferEventListener;
+import org.apache.sshd.common.kex.extension.KexExtensionHandler;
+import org.apache.sshd.common.kex.extension.KexExtensionHandler.AvailabilityPhase;
+import org.apache.sshd.common.keyprovider.KeyIdentityProvider;
 import org.apache.sshd.common.session.ConnectionService;
-import org.apache.sshd.common.session.Session;
+import org.apache.sshd.common.session.SessionContext;
+import org.apache.sshd.common.session.SessionDisconnectHandler;
 import org.apache.sshd.common.session.helpers.AbstractConnectionService;
 import org.apache.sshd.common.session.helpers.AbstractSession;
 import org.apache.sshd.common.util.GenericUtils;
@@ -79,21 +78,33 @@ import org.apache.sshd.common.util.net.SshdSocketAddress;
  * @author <a href="mailto:dev@mina.apache.org">Apache MINA SSHD Project</a>
  */
 public abstract class AbstractClientSession extends AbstractSession implements ClientSession {
+    protected final boolean sendImmediateIdentification;
+
     private final List<Object> identities = new CopyOnWriteArrayList<>();
     private final AuthenticationIdentitiesProvider identitiesProvider;
+    private final AttributeRepository connectionContext;
+
     private ServerKeyVerifier serverKeyVerifier;
     private UserInteraction userInteraction;
     private PasswordIdentityProvider passwordIdentityProvider;
-    private List<NamedFactory<UserAuth>> userAuthFactories;
-    private ScpTransferEventListener scpListener;
-    private ScpFileOpener scpOpener;
+    private KeyIdentityProvider keyIdentityProvider;
+    private List<UserAuthFactory> userAuthFactories;
     private SocketAddress connectAddress;
     private ClientProxyConnector proxyConnector;
-    private SftpClientFactory sftpClientFactory;
 
     protected AbstractClientSession(ClientFactoryManager factoryManager, IoSession ioSession) {
         super(false, factoryManager, ioSession);
-        identitiesProvider = AuthenticationIdentitiesProvider.wrap(identities);
+        this.sendImmediateIdentification = PropertyResolverUtils.getBooleanProperty(
+            factoryManager, ClientFactoryManager.SEND_IMMEDIATE_IDENTIFICATION,
+            ClientFactoryManager.DEFAULT_SEND_IMMEDIATE_IDENTIFICATION);
+
+        identitiesProvider = AuthenticationIdentitiesProvider.wrapIdentities(identities);
+        this.connectionContext = (AttributeRepository) ioSession.getAttribute(AttributeRepository.class);
+    }
+
+    @Override
+    public AttributeRepository getConnectionContext() {
+        return connectionContext;
     }
 
     @Override
@@ -112,7 +123,8 @@ public abstract class AbstractClientSession extends AbstractSession implements C
 
     @Override
     public ServerKeyVerifier getServerKeyVerifier() {
-        return resolveEffectiveProvider(ServerKeyVerifier.class, serverKeyVerifier, getFactoryManager().getServerKeyVerifier());
+        ClientFactoryManager manager = getFactoryManager();
+        return resolveEffectiveProvider(ServerKeyVerifier.class, serverKeyVerifier, manager.getServerKeyVerifier());
     }
 
     @Override
@@ -122,7 +134,8 @@ public abstract class AbstractClientSession extends AbstractSession implements C
 
     @Override
     public UserInteraction getUserInteraction() {
-        return resolveEffectiveProvider(UserInteraction.class, userInteraction, getFactoryManager().getUserInteraction());
+        ClientFactoryManager manager = getFactoryManager();
+        return resolveEffectiveProvider(UserInteraction.class, userInteraction, manager.getUserInteraction());
     }
 
     @Override
@@ -131,12 +144,13 @@ public abstract class AbstractClientSession extends AbstractSession implements C
     }
 
     @Override
-    public List<NamedFactory<UserAuth>> getUserAuthFactories() {
-        return resolveEffectiveFactories(UserAuth.class, userAuthFactories, getFactoryManager().getUserAuthFactories());
+    public List<UserAuthFactory> getUserAuthFactories() {
+        ClientFactoryManager manager = getFactoryManager();
+        return resolveEffectiveFactories(userAuthFactories, manager.getUserAuthFactories());
     }
 
     @Override
-    public void setUserAuthFactories(List<NamedFactory<UserAuth>> userAuthFactories) {
+    public void setUserAuthFactories(List<UserAuthFactory> userAuthFactories) {
         this.userAuthFactories = userAuthFactories; // OK if null/empty - inherit from parent
     }
 
@@ -147,7 +161,9 @@ public abstract class AbstractClientSession extends AbstractSession implements C
 
     @Override
     public PasswordIdentityProvider getPasswordIdentityProvider() {
-        return resolveEffectiveProvider(PasswordIdentityProvider.class, passwordIdentityProvider, getFactoryManager().getPasswordIdentityProvider());
+        ClientFactoryManager manager = getFactoryManager();
+        return resolveEffectiveProvider(PasswordIdentityProvider.class, passwordIdentityProvider,
+                manager.getPasswordIdentityProvider());
     }
 
     @Override
@@ -156,8 +172,21 @@ public abstract class AbstractClientSession extends AbstractSession implements C
     }
 
     @Override
+    public KeyIdentityProvider getKeyIdentityProvider() {
+        ClientFactoryManager manager = getFactoryManager();
+        return resolveEffectiveProvider(KeyIdentityProvider.class, keyIdentityProvider,
+                manager.getKeyIdentityProvider());
+    }
+
+    @Override
+    public void setKeyIdentityProvider(KeyIdentityProvider keyIdentityProvider) {
+        this.keyIdentityProvider = keyIdentityProvider;
+    }
+
+    @Override
     public ClientProxyConnector getClientProxyConnector() {
-        return resolveEffectiveProvider(ClientProxyConnector.class, proxyConnector, getFactoryManager().getClientProxyConnector());
+        ClientFactoryManager manager = getFactoryManager();
+        return resolveEffectiveProvider(ClientProxyConnector.class, proxyConnector, manager.getClientProxyConnector());
     }
 
     @Override
@@ -166,39 +195,29 @@ public abstract class AbstractClientSession extends AbstractSession implements C
     }
 
     @Override
-    public SftpClientFactory getSftpClientFactory() {
-        return resolveEffectiveProvider(SftpClientFactory.class, sftpClientFactory, getFactoryManager().getSftpClientFactory());
-    }
-
-    @Override
-    public void setSftpClientFactory(SftpClientFactory sftpClientFactory) {
-        this.sftpClientFactory = sftpClientFactory;
-    }
-
-    @Override
-    public void addPasswordIdentity(char[] password) {
+    public void addPasswordIdentity(String password) {
         // DO NOT USE checkNotNullOrNotEmpty SINCE IT TRIMS THE RESULT
-        ValidateUtils.checkTrue(password != null, "No password provided");
-        identities.add(new String(password));
+        ValidateUtils.checkTrue((password != null) && (!password.isEmpty()), "No password provided");
+        identities.add(password);
         if (log.isDebugEnabled()) { // don't show the password in the log
-            log.debug("addPasswordIdentity({})", this);
+            log.debug("addPasswordIdentity({}) {}", this, KeyUtils.getFingerPrint(password));
         }
     }
 
-    /*@Override
-    public String removePasswordIdentity(char[] password) {
+    @Override
+    public String removePasswordIdentity(String password) {
         if (GenericUtils.isEmpty(password)) {
             return null;
         }
 
-        int index = AuthenticationIdentitiesProvider.findIdentityIndex(
-                identities, AuthenticationIdentitiesProvider.PASSWORD_IDENTITY_COMPARATOR, password);
+        int index = AuthenticationIdentitiesProvider.findIdentityIndex(identities,
+                AuthenticationIdentitiesProvider.PASSWORD_IDENTITY_COMPARATOR, password);
         if (index >= 0) {
             return (String) identities.remove(index);
         } else {
             return null;
         }
-    }*/
+    }
 
     @Override
     public void addPublicKeyIdentity(KeyPair kp) {
@@ -210,8 +229,7 @@ public abstract class AbstractClientSession extends AbstractSession implements C
 
         if (log.isDebugEnabled()) {
             PublicKey key = kp.getPublic();
-            log.debug("addPublicKeyIdentity({}) {}-{}",
-                      this, KeyUtils.getKeyType(key), KeyUtils.getFingerPrint(key));
+            log.debug("addPublicKeyIdentity({}) {}-{}", this, KeyUtils.getKeyType(key), KeyUtils.getFingerPrint(key));
         }
     }
 
@@ -221,8 +239,8 @@ public abstract class AbstractClientSession extends AbstractSession implements C
             return null;
         }
 
-        int index = AuthenticationIdentitiesProvider.findIdentityIndex(
-                identities, AuthenticationIdentitiesProvider.KEYPAIR_IDENTITY_COMPARATOR, kp);
+        int index = AuthenticationIdentitiesProvider.findIdentityIndex(identities,
+                AuthenticationIdentitiesProvider.KEYPAIR_IDENTITY_COMPARATOR, kp);
         if (index >= 0) {
             return (KeyPair) identities.remove(index);
         } else {
@@ -230,28 +248,57 @@ public abstract class AbstractClientSession extends AbstractSession implements C
         }
     }
 
-    protected IoWriteFuture sendClientIdentification() throws Exception {
-        clientVersion = resolveIdentificationString(ClientFactoryManager.CLIENT_IDENTIFICATION);
+    protected void initializeKexPhase() throws Exception {
+        sendClientIdentification();
 
-        ClientProxyConnector proxyConnector = getClientProxyConnector();
-        if (proxyConnector != null) {
-            try {
-                proxyConnector.sendClientProxyMetadata(this);
-            } catch (Throwable t) {
-                log.warn("sendClientIdentification({}) failed ({}) to send proxy metadata: {}",
-                         this, t.getClass().getSimpleName(), t.getMessage());
-                if (log.isDebugEnabled()) {
-                    log.debug("sendClientIdentification(" + this + ") proxy metadata send failure details", t);
-                }
-
-                if (t instanceof Exception) {
-                    throw (Exception) t;
-                } else {
-                    throw new RuntimeSshException(t);
-                }
+        KexExtensionHandler extHandler = getKexExtensionHandler();
+        if ((extHandler == null) || (!extHandler.isKexExtensionsAvailable(this, AvailabilityPhase.PREKEX))) {
+            kexState.set(KexState.INIT);
+            sendKexInit();
+        } else {
+            if (log.isDebugEnabled()) {
+                log.debug("initializeKexPhase({}) delay KEX-INIT until server-side one received", this);
             }
         }
+    }
 
+    protected void initializeProxyConnector() throws Exception {
+        ClientProxyConnector proxyConnector = getClientProxyConnector();
+        boolean debugEnabled = log.isDebugEnabled();
+        if (proxyConnector == null) {
+            if (debugEnabled) {
+                log.debug("initializeProxyConnector({}) no proxy to initialize", this);
+            }
+            return;
+        }
+
+        try {
+            if (debugEnabled) {
+                log.debug("initializeProxyConnector({}) initialize proxy={}", this, proxyConnector);
+            }
+
+            proxyConnector.sendClientProxyMetadata(this);
+
+            if (debugEnabled) {
+                log.debug("initializeProxyConnector({}) proxy={} initialized", this, proxyConnector);
+            }
+        } catch (Throwable t) {
+            log.warn("initializeProxyConnector({}) failed ({}) to send proxy metadata: {}",
+                this, t.getClass().getSimpleName(), t.getMessage());
+            if (debugEnabled) {
+                log.debug("initializeProxyConnector(" + this + ") proxy metadata send failure details", t);
+            }
+
+            if (t instanceof Exception) {
+                throw (Exception) t;
+            } else {
+                throw new RuntimeSshException(t);
+            }
+        }
+    }
+
+    protected IoWriteFuture sendClientIdentification() throws Exception {
+        clientVersion = resolveIdentificationString(ClientFactoryManager.CLIENT_IDENTIFICATION);
         return sendIdentification(clientVersion);
     }
 
@@ -274,12 +321,13 @@ public abstract class AbstractClientSession extends AbstractSession implements C
     }
 
     @Override
-    public ChannelExec createExecChannel(String command) throws IOException {
-        ChannelExec channel = new ChannelExec(command);
+    public ChannelExec createExecChannel(String command, PtyChannelConfigurationHolder ptyConfig, Map<String, ?> env)
+            throws IOException {
+        ChannelExec channel = new ChannelExec(command, ptyConfig, env);
         ConnectionService service = getConnectionService();
         int id = service.registerChannel(channel);
         if (log.isDebugEnabled()) {
-            log.debug("createExecChannel({})[{}] created id={}", this, command, id);
+            log.debug("createExecChannel({})[{}] created id={} - PTY={}", this, command, id, ptyConfig);
         }
         return channel;
     }
@@ -296,7 +344,8 @@ public abstract class AbstractClientSession extends AbstractSession implements C
     }
 
     @Override
-    public ChannelDirectTcpip createDirectTcpipChannel(SshdSocketAddress local, SshdSocketAddress remote) throws IOException {
+    public ChannelDirectTcpip createDirectTcpipChannel(SshdSocketAddress local, SshdSocketAddress remote)
+            throws IOException {
         ChannelDirectTcpip channel = new ChannelDirectTcpip(local, remote);
         ConnectionService service = getConnectionService();
         int id = service.registerChannel(channel);
@@ -310,43 +359,14 @@ public abstract class AbstractClientSession extends AbstractSession implements C
         return getService(ClientUserAuthService.class);
     }
 
+    @Override
     protected ConnectionService getConnectionService() {
         return getService(ConnectionService.class);
     }
 
     @Override
-    public ScpFileOpener getScpFileOpener() {
-        return resolveEffectiveProvider(ScpFileOpener.class, scpOpener, getFactoryManager().getScpFileOpener());
-    }
-
-    @Override
-    public void setScpFileOpener(ScpFileOpener opener) {
-        scpOpener = opener;
-    }
-
-    @Override
-    public ScpTransferEventListener getScpTransferEventListener() {
-        return scpListener;
-    }
-
-    @Override
-    public void setScpTransferEventListener(ScpTransferEventListener listener) {
-        scpListener = listener;
-    }
-
-    @Override
-    public ScpClient createScpClient(ScpFileOpener opener, ScpTransferEventListener listener) {
-        return new DefaultScpClient(this, opener, listener);
-    }
-
-    @Override
-    public SftpClient createSftpClient(SftpVersionSelector selector) throws IOException {
-        SftpClientFactory factory = getSftpClientFactory();
-        return factory.createSftpClient(this, selector);
-    }
-
-    @Override
-    public SshdSocketAddress startLocalPortForwarding(SshdSocketAddress local, SshdSocketAddress remote) throws IOException {
+    public SshdSocketAddress startLocalPortForwarding(SshdSocketAddress local, SshdSocketAddress remote)
+            throws IOException {
         ForwardingFilter filter = getForwardingFilter();
         return filter.startLocalPortForwarding(local, remote);
     }
@@ -358,7 +378,8 @@ public abstract class AbstractClientSession extends AbstractSession implements C
     }
 
     @Override
-    public SshdSocketAddress startRemotePortForwarding(SshdSocketAddress remote, SshdSocketAddress local) throws IOException {
+    public SshdSocketAddress startRemotePortForwarding(SshdSocketAddress remote, SshdSocketAddress local)
+            throws IOException {
         ForwardingFilter filter = getForwardingFilter();
         return filter.startRemotePortForwarding(remote, local);
     }
@@ -381,6 +402,7 @@ public abstract class AbstractClientSession extends AbstractSession implements C
         filter.stopDynamicPortForwarding(local);
     }
 
+    @Override
     protected ForwardingFilter getForwardingFilter() {
         ConnectionService service = Objects.requireNonNull(getConnectionService(), "No connection service");
         return Objects.requireNonNull(service.getForwardingFilter(), "No forwarder");
@@ -394,27 +416,37 @@ public abstract class AbstractClientSession extends AbstractSession implements C
     }
 
     @Override
-    public void startService(String name) throws Exception {
+    public void startService(String name, Buffer buffer) throws Exception {
+        SessionDisconnectHandler handler = getSessionDisconnectHandler();
+        if ((handler != null) && handler.handleUnsupportedServiceDisconnectReason(this,
+                SshConstants.SSH_MSG_SERVICE_REQUEST, name, buffer)) {
+            if (log.isDebugEnabled()) {
+                log.debug("startService({}) ignore unknown service={} by handler", this, name);
+            }
+            return;
+        }
+
         throw new IllegalStateException("Starting services is not supported on the client side: " + name);
     }
 
     @Override
-    public ChannelShell createShellChannel() throws IOException {
+    public ChannelShell createShellChannel(PtyChannelConfigurationHolder ptyConfig, Map<String, ?> env)
+            throws IOException {
         if ((inCipher instanceof CipherNone) || (outCipher instanceof CipherNone)) {
             throw new IllegalStateException("Interactive channels are not supported with none cipher");
         }
 
-        ChannelShell channel = new ChannelShell();
+        ChannelShell channel = new ChannelShell(ptyConfig, env);
         ConnectionService service = getConnectionService();
         int id = service.registerChannel(channel);
         if (log.isDebugEnabled()) {
-            log.debug("createShellChannel({}) created id={}", this, id);
+            log.debug("createShellChannel({}) created id={} - PTY={}", this, id, ptyConfig);
         }
         return channel;
     }
 
     @Override
-    protected boolean readIdentification(Buffer buffer) throws IOException {
+    protected boolean readIdentification(Buffer buffer) throws Exception {
         List<String> ident = doReadIdentification(buffer, false);
         int numLines = GenericUtils.size(ident);
         serverVersion = (numLines <= 0) ? null : ident.remove(numLines - 1);
@@ -426,16 +458,22 @@ public abstract class AbstractClientSession extends AbstractSession implements C
             log.debug("readIdentification({}) Server version string: {}", this, serverVersion);
         }
 
-        if (!Session.isValidVersionPrefix(serverVersion)) {
+        if (!SessionContext.isValidVersionPrefix(serverVersion)) {
             throw new SshException(SshConstants.SSH2_DISCONNECT_PROTOCOL_VERSION_NOT_SUPPORTED,
-                    "Unsupported protocol version: " + serverVersion);
+                "Unsupported protocol version: " + serverVersion);
         }
 
-        signalExtraServerVersionInfo(ident);
+        signalExtraServerVersionInfo(serverVersion, ident);
+        if (!sendImmediateIdentification) {
+            initializeKexPhase();
+        }
+
         return true;
     }
 
-    protected void signalExtraServerVersionInfo(List<String> lines) throws IOException {
+    protected void signalExtraServerVersionInfo(String version, List<String> lines) throws Exception {
+        signalPeerIdentificationReceived(version, lines);
+
         if (GenericUtils.isEmpty(lines)) {
             return;
         }
@@ -446,10 +484,11 @@ public abstract class AbstractClientSession extends AbstractSession implements C
                 ui.serverVersionInfo(this, lines);
             }
         } catch (Error e) {
-            log.warn("signalExtraServerVersionInfo({}) failed ({}) to consult interaction: {}",
-                     this, e.getClass().getSimpleName(), e.getMessage());
+            log.warn("signalExtraServerVersionInfo({})[{}] failed ({}) to consult interaction: {}",
+                this, version, e.getClass().getSimpleName(), e.getMessage());
             if (log.isDebugEnabled()) {
-                log.debug("signalExtraServerVersionInfo(" + this + ") interaction consultation failure details", e);
+                log.debug("signalExtraServerVersionInfo(" + this + ")[" + version
+                        + "] interaction consultation failure details", e);
             }
 
             throw new RuntimeSshException(e);
@@ -464,24 +503,43 @@ public abstract class AbstractClientSession extends AbstractSession implements C
 
     @Override
     protected void setKexSeed(byte... seed) {
-        i_c = ValidateUtils.checkNotNullAndNotEmpty(seed, "No KEX seed");
+        setClientKexData(seed);
+    }
+
+    @Override
+    protected byte[] receiveKexInit(Buffer buffer) throws Exception {
+        byte[] seed = super.receiveKexInit(buffer);
+        /*
+         * Check if the session has delayed its KEX-INIT until the server's one was
+         * received in order to support KEX extension negotiation (RFC 8308).
+         */
+        if (kexState.compareAndSet(KexState.UNKNOWN, KexState.RUN)) {
+            if (log.isDebugEnabled()) {
+                log.debug("receiveKexInit({}) sending client proposal", this);
+            }
+            kexState.set(KexState.INIT);
+            sendKexInit();
+        }
+
+        return seed;
     }
 
     @Override
     protected void receiveKexInit(Map<KexProposalOption, String> proposal, byte[] seed) throws IOException {
         mergeProposals(serverProposal, proposal);
-        i_s = seed;
+        setServerKexData(seed);
     }
 
     @Override
     protected void checkKeys() throws SshException {
         ServerKeyVerifier serverKeyVerifier = Objects.requireNonNull(getServerKeyVerifier(), "No server key verifier");
-        SocketAddress remoteAddress = ioSession.getRemoteAddress();
+        IoSession networkSession = getIoSession();
+        SocketAddress remoteAddress = networkSession.getRemoteAddress();
         PublicKey serverKey = kex.getServerKey();
         boolean verified = serverKeyVerifier.verifyServerKey(this, remoteAddress, serverKey);
         if (log.isDebugEnabled()) {
-            log.debug("checkKeys({}) key={}-{}, verified={}",
-                      this, KeyUtils.getKeyType(serverKey), KeyUtils.getFingerPrint(serverKey), verified);
+            log.debug("checkKeys({}) key={}-{}, verified={}", this, KeyUtils.getKeyType(serverKey),
+                    KeyUtils.getFingerPrint(serverKey), verified);
         }
 
         if (!verified) {
@@ -491,9 +549,10 @@ public abstract class AbstractClientSession extends AbstractSession implements C
 
     @Override
     public KeyExchangeFuture switchToNoneCipher() throws IOException {
-        if (!(currentService instanceof AbstractConnectionService<?>)
-                || !GenericUtils.isEmpty(((AbstractConnectionService<?>) currentService).getChannels())) {
-            throw new IllegalStateException("The switch to the none cipher must be done immediately after authentication");
+        if (!(currentService instanceof AbstractConnectionService)
+                || !GenericUtils.isEmpty(((AbstractConnectionService) currentService).getChannels())) {
+            throw new IllegalStateException(
+                    "The switch to the none cipher must be done immediately after authentication");
         }
 
         if (kexState.compareAndSet(KexState.DONE, KexState.INIT)) {
@@ -542,8 +601,11 @@ public abstract class AbstractClientSession extends AbstractSession implements C
                 proposal.put(KexProposalOption.C2SENC, BuiltinCiphers.Constants.NONE);
                 proposal.put(KexProposalOption.S2CENC, BuiltinCiphers.Constants.NONE);
 
-                byte[] seed = sendKexInit(proposal);
-                setKexSeed(seed);
+                byte[] seed;
+                synchronized (kexState) {
+                    seed = sendKexInit(proposal);
+                    setKexSeed(seed);
+                }
             }
 
             return Objects.requireNonNull(kexFutureHolder.get(), "No current KEX future");

@@ -18,12 +18,6 @@
  */
 package org.apache.sshd.client.keyverifier;
 
-
-import org.apache.sshd.client.session.ClientSession;
-
-import java.net.SocketAddress;
-import java.security.PublicKey;
-
 /**
  * A ServerKeyVerifier that accepts all server keys.
  *
@@ -34,8 +28,5 @@ public final class AcceptAllServerKeyVerifier extends StaticServerKeyVerifier {
 
     private AcceptAllServerKeyVerifier() {
         super(true);
-    }
-
-    protected void handleAcceptance(ClientSession sshClientSession, SocketAddress remoteAddress, PublicKey serverKey) {
     }
 }

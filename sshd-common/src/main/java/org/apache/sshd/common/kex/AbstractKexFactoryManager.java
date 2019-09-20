@@ -25,7 +25,7 @@ import java.util.List;
 import org.apache.sshd.common.NamedFactory;
 import org.apache.sshd.common.cipher.Cipher;
 import org.apache.sshd.common.compression.Compression;
-import org.apache.sshd.common.keyprovider.KeyPairProvider;
+import org.apache.sshd.common.kex.extension.KexExtensionHandler;
 import org.apache.sshd.common.mac.Mac;
 import org.apache.sshd.common.signature.Signature;
 import org.apache.sshd.common.util.GenericUtils;
@@ -37,26 +37,31 @@ import org.apache.sshd.common.util.closeable.AbstractInnerCloseable;
 public abstract class AbstractKexFactoryManager
               extends AbstractInnerCloseable
               implements KexFactoryManager {
-    private KexFactoryManager parent;
+    private final KexFactoryManager delegate;
     private List<NamedFactory<KeyExchange>> keyExchangeFactories;
     private List<NamedFactory<Cipher>> cipherFactories;
     private List<NamedFactory<Compression>> compressionFactories;
     private List<NamedFactory<Mac>> macFactories;
     private List<NamedFactory<Signature>> signatureFactories;
-    private KeyPairProvider keyPairProvider;
+    private KexExtensionHandler kexExtensionHandler;
 
     protected AbstractKexFactoryManager() {
         this(null);
     }
 
-    protected AbstractKexFactoryManager(KexFactoryManager parent) {
-        this.parent = parent;
+    protected AbstractKexFactoryManager(KexFactoryManager delegate) {
+        this.delegate = delegate;
+    }
+
+    protected KexFactoryManager getDelegate() {
+        return delegate;
     }
 
     @Override
     public List<NamedFactory<KeyExchange>> getKeyExchangeFactories() {
-        return resolveEffectiveFactories(KeyExchange.class, keyExchangeFactories,
-                (parent == null) ? Collections.emptyList() : parent.getKeyExchangeFactories());
+        KexFactoryManager parent = getDelegate();
+        return resolveEffectiveFactories(keyExchangeFactories,
+            (parent == null) ? Collections.emptyList() : parent.getKeyExchangeFactories());
     }
 
     @Override
@@ -66,8 +71,9 @@ public abstract class AbstractKexFactoryManager
 
     @Override
     public List<NamedFactory<Cipher>> getCipherFactories() {
-        return resolveEffectiveFactories(Cipher.class, cipherFactories,
-                (parent == null) ? Collections.emptyList() : parent.getCipherFactories());
+        KexFactoryManager parent = getDelegate();
+        return resolveEffectiveFactories(cipherFactories,
+            (parent == null) ? Collections.emptyList() : parent.getCipherFactories());
     }
 
     @Override
@@ -77,8 +83,9 @@ public abstract class AbstractKexFactoryManager
 
     @Override
     public List<NamedFactory<Compression>> getCompressionFactories() {
-        return resolveEffectiveFactories(Compression.class, compressionFactories,
-                (parent == null) ? Collections.emptyList() : parent.getCompressionFactories());
+        KexFactoryManager parent = getDelegate();
+        return resolveEffectiveFactories(compressionFactories,
+            (parent == null) ? Collections.emptyList() : parent.getCompressionFactories());
     }
 
     @Override
@@ -88,8 +95,9 @@ public abstract class AbstractKexFactoryManager
 
     @Override
     public List<NamedFactory<Mac>> getMacFactories() {
-        return resolveEffectiveFactories(Mac.class, macFactories,
-                (parent == null) ? Collections.emptyList() : parent.getMacFactories());
+        KexFactoryManager parent = getDelegate();
+        return resolveEffectiveFactories(macFactories,
+            (parent == null) ? Collections.emptyList() : parent.getMacFactories());
     }
 
     @Override
@@ -99,8 +107,9 @@ public abstract class AbstractKexFactoryManager
 
     @Override
     public List<NamedFactory<Signature>> getSignatureFactories() {
-        return resolveEffectiveFactories(Signature.class, signatureFactories,
-                (parent == null) ? Collections.emptyList() : parent.getSignatureFactories());
+        KexFactoryManager parent = getDelegate();
+        return resolveEffectiveFactories(signatureFactories,
+            (parent == null) ? Collections.emptyList() : parent.getSignatureFactories());
     }
 
     @Override
@@ -109,17 +118,18 @@ public abstract class AbstractKexFactoryManager
     }
 
     @Override
-    public KeyPairProvider getKeyPairProvider() {
-        return resolveEffectiveProvider(KeyPairProvider.class, keyPairProvider,
-                (parent == null) ? null : parent.getKeyPairProvider());
+    public KexExtensionHandler getKexExtensionHandler() {
+        KexFactoryManager parent = getDelegate();
+        return resolveEffectiveProvider(
+            KexExtensionHandler.class, kexExtensionHandler, (parent == null) ? null : parent.getKexExtensionHandler());
     }
 
     @Override
-    public void setKeyPairProvider(KeyPairProvider keyPairProvider) {
-        this.keyPairProvider = keyPairProvider;
+    public void setKexExtensionHandler(KexExtensionHandler kexExtensionHandler) {
+        this.kexExtensionHandler = kexExtensionHandler;
     }
 
-    protected <V> List<NamedFactory<V>> resolveEffectiveFactories(Class<V> factoryType, List<NamedFactory<V>> local, List<NamedFactory<V>> inherited) {
+    protected <V> List<V> resolveEffectiveFactories(List<V> local, List<V> inherited) {
         if (GenericUtils.isEmpty(local)) {
             return inherited;
         } else {

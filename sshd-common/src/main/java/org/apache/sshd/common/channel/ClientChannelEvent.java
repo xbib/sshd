@@ -23,7 +23,7 @@ import java.util.EnumSet;
 import java.util.Set;
 
 /**
- * Various events used by {@link ClientChannel#waitFor(java.util.Collection, long)}
+ * Various events used by {@code ClientChannel#waitFor(java.util.Collection, long)}
  * @author <a href="mailto:dev@mina.apache.org">Apache MINA SSHD Project</a>
  */
 public enum ClientChannelEvent {
@@ -42,17 +42,15 @@ public enum ClientChannelEvent {
     EOF,
     /**
      * Received exit status from remote peer
-     * @see ClientChannel#getExitStatus()
      **/
     EXIT_STATUS,
     /**
      * Received exit signal from remote peer
-     * @see ClientChannel#getExitSignal()
      */
     EXIT_SIGNAL,
     /** Channel has been successfully opened */
     OPENED;
 
     public static final Set<ClientChannelEvent> VALUES =
-            Collections.unmodifiableSet(EnumSet.allOf(ClientChannelEvent.class));
+        Collections.unmodifiableSet(EnumSet.allOf(ClientChannelEvent.class));
 }

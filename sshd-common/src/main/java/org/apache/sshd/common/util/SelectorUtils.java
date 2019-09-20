@@ -26,15 +26,15 @@ import java.util.Objects;
 import java.util.StringTokenizer;
 
 /**
- * <p>This is a utility class used by selectors and DirectoryScanner. The
+ * <p>
+ * This is a utility class used by selectors and DirectoryScanner. The
  * functionality more properly belongs just to selectors, but unfortunately
  * DirectoryScanner exposed these as protected methods. Thus we have to
  * support any subclasses of DirectoryScanner that may access these methods.
  * </p>
  * <p>This is a Singleton.</p>
  *
- * @author Arnout J. Kuiper
- *         <a href="mailto:ajkuiper@wxs.nl">ajkuiper@wxs.nl</a>
+ * @author Arnout J. Kuiper <a href="mailto:ajkuiper@wxs.nl">ajkuiper@wxs.nl</a>
  * @author Magesh Umasankar
  * @author <a href="mailto:bruce@callenish.com">Bruce Atherton</a>
  * @version $Id$
@@ -91,18 +91,19 @@ public final class SelectorUtils {
      * @param isCaseSensitive Whether or not matching should be performed
      *                        case sensitively.
      * @return whether or not a given path matches the start of a given
-     * pattern up to the first "**".
+     * pattern up to the first &quot;**&quot;.
      */
-    public static boolean matchPatternStart(String pattern, String str,
-                                            boolean isCaseSensitive) {
-        if (pattern.length() > (REGEX_HANDLER_PREFIX.length() + PATTERN_HANDLER_SUFFIX.length() + 1)
-                && pattern.startsWith(REGEX_HANDLER_PREFIX) && pattern.endsWith(PATTERN_HANDLER_SUFFIX)) {
+    public static boolean matchPatternStart(String pattern, String str, boolean isCaseSensitive) {
+        if ((pattern.length() > (REGEX_HANDLER_PREFIX.length() + PATTERN_HANDLER_SUFFIX.length() + 1))
+                && pattern.startsWith(REGEX_HANDLER_PREFIX)
+                && pattern.endsWith(PATTERN_HANDLER_SUFFIX)) {
             // FIXME: ICK! But we can't do partial matches for regex, so we have to reserve judgement until we have
             // a file to deal with, or we can definitely say this is an exclusion...
             return true;
         } else {
-            if (pattern.length() > (ANT_HANDLER_PREFIX.length() + PATTERN_HANDLER_SUFFIX.length() + 1)
-                    && pattern.startsWith(ANT_HANDLER_PREFIX) && pattern.endsWith(PATTERN_HANDLER_SUFFIX)) {
+            if ((pattern.length() > (ANT_HANDLER_PREFIX.length() + PATTERN_HANDLER_SUFFIX.length() + 1))
+                    && pattern.startsWith(ANT_HANDLER_PREFIX)
+                    && pattern.endsWith(PATTERN_HANDLER_SUFFIX)) {
                 pattern =
                         pattern.substring(ANT_HANDLER_PREFIX.length(), pattern.length() - PATTERN_HANDLER_SUFFIX.length());
             }
@@ -114,7 +115,8 @@ public final class SelectorUtils {
         }
     }
 
-    private static boolean matchAntPathPatternStart(String pattern, String str, String separator, boolean isCaseSensitive) {
+    private static boolean matchAntPathPatternStart(
+            String pattern, String str, String separator, boolean isCaseSensitive) {
         // When str starts with a File.separator, pattern has to start with a
         // File.separator.
         // When pattern starts with a File.separator, str has to start with a
@@ -182,17 +184,16 @@ public final class SelectorUtils {
      * or <code>false</code> otherwise.
      */
     public static boolean matchPath(String pattern, String str, boolean isCaseSensitive) {
-        if (pattern.length() > (REGEX_HANDLER_PREFIX.length() + PATTERN_HANDLER_SUFFIX.length() + 1)
-                && pattern.startsWith(REGEX_HANDLER_PREFIX) && pattern.endsWith(PATTERN_HANDLER_SUFFIX)) {
-            pattern = pattern.substring(REGEX_HANDLER_PREFIX.length(), pattern.length()
-                    - PATTERN_HANDLER_SUFFIX.length());
-
+        if ((pattern.length() > (REGEX_HANDLER_PREFIX.length() + PATTERN_HANDLER_SUFFIX.length() + 1))
+                && pattern.startsWith(REGEX_HANDLER_PREFIX)
+                && pattern.endsWith(PATTERN_HANDLER_SUFFIX)) {
+            pattern = pattern.substring(REGEX_HANDLER_PREFIX.length(), pattern.length() - PATTERN_HANDLER_SUFFIX.length());
             return str.matches(pattern);
         } else {
-            if (pattern.length() > (ANT_HANDLER_PREFIX.length() + PATTERN_HANDLER_SUFFIX.length() + 1)
-                    && pattern.startsWith(ANT_HANDLER_PREFIX) && pattern.endsWith(PATTERN_HANDLER_SUFFIX)) {
-                pattern =
-                        pattern.substring(ANT_HANDLER_PREFIX.length(), pattern.length() - PATTERN_HANDLER_SUFFIX.length());
+            if ((pattern.length() > (ANT_HANDLER_PREFIX.length() + PATTERN_HANDLER_SUFFIX.length() + 1))
+                    && pattern.startsWith(ANT_HANDLER_PREFIX)
+                    && pattern.endsWith(PATTERN_HANDLER_SUFFIX)) {
+                pattern = pattern.substring(ANT_HANDLER_PREFIX.length(), pattern.length() - PATTERN_HANDLER_SUFFIX.length());
             }
 
             return matchAntPathPattern(pattern, str, isCaseSensitive);
@@ -461,8 +462,7 @@ public final class SelectorUtils {
             int patLength = patIdxTmp - patIdxStart - 1;
             int strLength = strIdxEnd - strIdxStart + 1;
             int foundIdx = -1;
-            strLoop:
-            for (int i = 0; i <= strLength - patLength; i++) {
+            strLoop: for (int i = 0; i <= strLength - patLength; i++) {
                 for (int j = 0; j < patLength; j++) {
                     ch = patArr[patIdxStart + j + 1];
                     if (ch != '?' && !equals(ch, strArr[strIdxStart + i + j], isCaseSensitive)) {
@@ -533,72 +533,7 @@ public final class SelectorUtils {
         return ret;
     }
 
-    /**
-     * Normalizes the path by removing '.', '..' and double separators (e.g. '//')
-     *
-     * @param path      Original path - ignored if {@code null}/empty
-     * @param separator The separator used for the path components
-     * @return normalized path
-     */
-    public static String normalizePath(String path, String separator) {
-        if (GenericUtils.isEmpty(path)) {
-            return path;
-        }
-
-        boolean startsWithSeparator = path.startsWith(separator);
-        List<String> tokens = tokenizePath(path, separator);
-        int removedDots = 0;
-        // clean up
-        for (int i = tokens.size() - 1; i >= 0; i--) {
-            String t = tokens.get(i);
-            if (GenericUtils.isEmpty(t)) {
-                tokens.remove(i);
-            } else if (t.equals(".")) {
-                tokens.remove(i);
-                removedDots++;
-            } else if (t.equals("..")) {
-                tokens.remove(i);
-                removedDots++;
-                if (i >= 1) {
-                    tokens.remove(--i);
-                    removedDots++;
-                }
-            }
-        }
-
-        if (GenericUtils.isEmpty(tokens)) {
-            if (removedDots > 0) {
-                return "";  // had some "." and ".." after which we remained with no path
-            } else {
-                return separator;   // it was all separators
-            }
-        }
-
-        // serialize
-        StringBuilder buffer = new StringBuilder(path.length());
-        for (int index = 0; index < tokens.size(); index++) {
-            String token = tokens.get(index);
-            if (index == 0) {
-                if (startsWithSeparator) {
-                    buffer.append(separator);
-                } else if (OsUtils.isWin32() && isWindowsDriveSpecified(token)) {
-                    buffer.append(separator);
-                }
-            } else {
-                buffer.append(separator);
-            }
-            buffer.append(token);
-
-            // for root Windows drive we need to return "C:/" or we get errors from the local file system
-            if ((tokens.size() == 1) && OsUtils.isWin32() && isWindowsDriveSpecified(token)) {
-                buffer.append(separator);
-            }
-        }
-
-        return buffer.toString();
-    }
-
-    /**
+    /**   /**
      * Converts a path to one matching the target file system by applying the
      * &quot;slashification&quot; rules, converting it to a local path and
      * then translating its separator to the target file system one (if different
@@ -610,7 +545,8 @@ public final class SelectorUtils {
      * @see #translateToLocalFileSystemPath(String, char, String)
      */
     public static String translateToLocalFileSystemPath(String path, char pathSeparator, FileSystem fs) {
-        return translateToLocalFileSystemPath(path, pathSeparator,  Objects.requireNonNull(fs, "No target file system").getSeparator());
+        return translateToLocalFileSystemPath(path, pathSeparator,
+            Objects.requireNonNull(fs, "No target file system").getSeparator());
     }
 
     /**
@@ -826,33 +762,9 @@ public final class SelectorUtils {
     }
 
     /**
-     * Returns dependency information on these two files. If src has been
-     * modified later than target, it returns true. If target doesn't exist,
-     * it likewise returns true. Otherwise, target is newer than src and
-     * is not out of date, thus the method returns false. It also returns
-     * false if the src file doesn't even exist, since how could the
-     * target then be out of date.
-     *
-     * @param src         the original file
-     * @param target      the file being compared against
-     * @param granularity the amount in seconds of slack we will give in
-     *                    determining out of dateness
-     * @return whether the target is out of date
-     */
-    public static boolean isOutOfDate(File src, File target, int granularity) {
-        if (!src.exists()) {
-            return false;
-        }
-        if (!target.exists()) {
-            return true;
-        }
-        return (src.lastModified() - granularity) > target.lastModified();
-    }
-
-    /**
-     * "Flattens" a string by removing all whitespace (space, tab, linefeed,
-     * carriage return, and formfeed). This uses StringTokenizer and the
-     * default set of tokens as documented in the single arguement constructor.
+     * "Flattens" a string by removing all whitespace (space, tab, line-feed,
+     * carriage return, and form-feed). This uses StringTokenizer and the
+     * default set of tokens as documented in the single argument constructor.
      *
      * @param input a String to remove all whitespace.
      * @return a String that has had all whitespace removed.

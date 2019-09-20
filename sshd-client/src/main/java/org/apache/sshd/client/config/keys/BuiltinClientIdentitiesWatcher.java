@@ -26,12 +26,13 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
-import java.util.function.Supplier;
 
 import org.apache.sshd.common.NamedResource;
 import org.apache.sshd.common.config.keys.BuiltinIdentities;
 import org.apache.sshd.common.config.keys.FilePasswordProvider;
+import org.apache.sshd.common.config.keys.FilePasswordProviderHolder;
 import org.apache.sshd.common.config.keys.KeyUtils;
+import org.apache.sshd.common.session.SessionContext;
 import org.apache.sshd.common.util.GenericUtils;
 
 /**
@@ -48,18 +49,18 @@ public class BuiltinClientIdentitiesWatcher extends ClientIdentitiesWatcher {
     public BuiltinClientIdentitiesWatcher(Path keysFolder, Collection<String> ids, boolean supportedOnly,
             ClientIdentityLoader loader, FilePasswordProvider provider, boolean strict) {
         this(keysFolder, ids, supportedOnly,
-             GenericUtils.supplierOf(Objects.requireNonNull(loader, "No client identity loader")),
-             GenericUtils.supplierOf(Objects.requireNonNull(provider, "No password provider")),
+             ClientIdentityLoaderHolder.loaderHolderOf(Objects.requireNonNull(loader, "No client identity loader")),
+             FilePasswordProviderHolder.providerHolderOf(Objects.requireNonNull(provider, "No password provider")),
              strict);
     }
 
     public BuiltinClientIdentitiesWatcher(Path keysFolder, boolean supportedOnly,
-            Supplier<ClientIdentityLoader> loader, Supplier<FilePasswordProvider> provider, boolean strict) {
+            ClientIdentityLoaderHolder loader, FilePasswordProviderHolder provider, boolean strict) {
         this(keysFolder, NamedResource.getNameList(BuiltinIdentities.VALUES), supportedOnly, loader, provider, strict);
     }
 
     public BuiltinClientIdentitiesWatcher(Path keysFolder, Collection<String> ids, boolean supportedOnly,
-            Supplier<ClientIdentityLoader> loader, Supplier<FilePasswordProvider> provider, boolean strict) {
+            ClientIdentityLoaderHolder loader, FilePasswordProviderHolder provider, boolean strict) {
         super(getBuiltinIdentitiesPaths(keysFolder, ids), loader, provider, strict);
         this.supportedOnly = supportedOnly;
     }
@@ -69,18 +70,20 @@ public class BuiltinClientIdentitiesWatcher extends ClientIdentitiesWatcher {
     }
 
     @Override
-    public Iterable<KeyPair> loadKeys() {
-        return isSupportedOnly() ? loadKeys(this::isSupported) : super.loadKeys();
+    public Iterable<KeyPair> loadKeys(SessionContext session) {
+        return isSupportedOnly()
+            ? loadKeys(session, p -> isSupported(session, p))
+            : super.loadKeys(session);
     }
 
-    private boolean isSupported(KeyPair kp) {
+    protected boolean isSupported(SessionContext session, KeyPair kp) {
         BuiltinIdentities id = BuiltinIdentities.fromKeyPair(kp);
         if ((id != null) && id.isSupported()) {
             return true;
         }
         if (log.isDebugEnabled()) {
             log.debug("loadKeys - remove unsupported identity={}, key-type={}, key={}",
-                    id, KeyUtils.getKeyType(kp), KeyUtils.getFingerPrint(kp.getPublic()));
+                id, KeyUtils.getKeyType(kp), KeyUtils.getFingerPrint(kp.getPublic()));
         }
         return false;
     }

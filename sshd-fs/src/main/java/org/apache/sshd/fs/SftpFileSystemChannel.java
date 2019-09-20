@@ -19,12 +19,12 @@
 
 package org.apache.sshd.fs;
 
-import org.apache.sshd.client.subsystem.sftp.SftpClient;
-import org.apache.sshd.client.subsystem.sftp.SftpRemotePathChannel;
-
 import java.io.IOException;
 import java.util.Collection;
 import java.util.Objects;
+
+import org.apache.sshd.client.subsystem.sftp.SftpClient;
+import org.apache.sshd.client.subsystem.sftp.SftpRemotePathChannel;
 
 /**
  * @author <a href="mailto:dev@mina.apache.org">Apache MINA SSHD Project</a>

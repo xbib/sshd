@@ -55,12 +55,15 @@ public abstract class AbstractPrivateKeyObfuscator implements PrivateKeyObfuscat
     }
 
     @Override
-    public byte[] generateInitializationVector(PrivateKeyEncryptionContext encContext) throws GeneralSecurityException {
+    public byte[] generateInitializationVector(PrivateKeyEncryptionContext encContext)
+            throws GeneralSecurityException {
         return generateInitializationVector(resolveKeyLength(encContext));
     }
 
     @Override
-    public <A extends Appendable> A appendPrivateKeyEncryptionContext(A sb, PrivateKeyEncryptionContext encContext) throws IOException {
+    public <A extends Appendable> A appendPrivateKeyEncryptionContext(
+            A sb, PrivateKeyEncryptionContext encContext)
+                throws IOException {
         if (encContext == null) {
             return sb;
         }
@@ -94,7 +97,8 @@ public abstract class AbstractPrivateKeyObfuscator implements PrivateKeyObfuscat
     // see http://martin.kleppmann.com/2013/05/24/improving-security-of-ssh-private-keys.html
     // see http://www.ict.griffith.edu.au/anthony/info/crypto/openssl.hints (Password to Encryption Key section)
     // see http://openssl.6102.n7.nabble.com/DES-EDE3-CBC-technical-details-td24883.html
-    protected byte[] deriveEncryptionKey(PrivateKeyEncryptionContext encContext, int outputKeyLength) throws GeneralSecurityException {
+    protected byte[] deriveEncryptionKey(PrivateKeyEncryptionContext encContext, int outputKeyLength)
+            throws GeneralSecurityException {
         Objects.requireNonNull(encContext, "No encryption context");
         ValidateUtils.checkNotNullAndNotEmpty(encContext.getCipherName(), "No cipher name");
         ValidateUtils.checkNotNullAndNotEmpty(encContext.getCipherType(), "No cipher type");
@@ -105,28 +109,35 @@ public abstract class AbstractPrivateKeyObfuscator implements PrivateKeyObfuscat
 
         String password = ValidateUtils.checkNotNullAndNotEmpty(encContext.getPassword(), "No encryption password");
         byte[] passBytes = password.getBytes(StandardCharsets.UTF_8);
-        byte[] keyValue = new byte[outputKeyLength];
-        MessageDigest hash = SecurityUtils.getMessageDigest(BuiltinDigests.Constants.MD5);
-        byte[]  prevHash = GenericUtils.EMPTY_BYTE_ARRAY;
-        for (int index = 0, remLen = keyValue.length; index < keyValue.length;) {
-            hash.reset();    // just making sure
+        byte[] prevHash = GenericUtils.EMPTY_BYTE_ARRAY;
+        try {
+            byte[] keyValue = new byte[outputKeyLength];
+            MessageDigest hash = SecurityUtils.getMessageDigest(BuiltinDigests.Constants.MD5);
+            for (int index = 0, remLen = keyValue.length; index < keyValue.length;) {
+                hash.reset();    // just making sure
 
-            hash.update(prevHash, 0, prevHash.length);
-            hash.update(passBytes, 0, passBytes.length);
-            hash.update(initVector, 0, Math.min(initVector.length, 8));
+                hash.update(prevHash, 0, prevHash.length);
+                hash.update(passBytes, 0, passBytes.length);
+                hash.update(initVector, 0, Math.min(initVector.length, 8));
 
-            prevHash = hash.digest();
+                prevHash = hash.digest();
 
-            System.arraycopy(prevHash, 0, keyValue, index, Math.min(remLen, prevHash.length));
-            index += prevHash.length;
-            remLen -= prevHash.length;
+                System.arraycopy(prevHash, 0, keyValue, index, Math.min(remLen, prevHash.length));
+                index += prevHash.length;
+                remLen -= prevHash.length;
+            }
+
+            return keyValue;
+        } finally {
+            password = null;
+            Arrays.fill(passBytes, (byte) 0);   // clean up sensitive data a.s.a.p.
+            Arrays.fill(prevHash, (byte) 0);   // clean up sensitive data a.s.a.p.
         }
-
-        return keyValue;
     }
 
-    protected byte[] applyPrivateKeyCipher(byte[] bytes, PrivateKeyEncryptionContext encContext, int numBits, byte[] keyValue, boolean encryptIt)
-            throws GeneralSecurityException {
+    protected byte[] applyPrivateKeyCipher(
+            byte[] bytes, PrivateKeyEncryptionContext encContext, int numBits, byte[] keyValue, boolean encryptIt)
+                throws IOException, GeneralSecurityException {
         Objects.requireNonNull(encContext, "No encryption context");
         String cipherName = ValidateUtils.checkNotNullAndNotEmpty(encContext.getCipherName(), "No cipher name");
         ValidateUtils.checkNotNullAndNotEmpty(encContext.getCipherType(), "No cipher type");
@@ -143,9 +154,10 @@ public abstract class AbstractPrivateKeyObfuscator implements PrivateKeyObfuscat
         int maxAllowedBits = Cipher.getMaxAllowedKeyLength(xform);
         // see http://www.javamex.com/tutorials/cryptography/unrestricted_policy_files.shtml
         if (numBits > maxAllowedBits) {
-            throw new InvalidKeySpecException("applyPrivateKeyCipher(" + xform + ")[encrypt=" + encryptIt + "]"
-                                            + " required key length (" + numBits + ")"
-                                            + " exceeds max. available: " + maxAllowedBits);
+            throw new InvalidKeySpecException(
+                "applyPrivateKeyCipher(" + xform + ")[encrypt=" + encryptIt + "]"
+                    + " required key length (" + numBits + ")"
+                    + " exceeds max. available: " + maxAllowedBits);
         }
 
         SecretKeySpec skeySpec = new SecretKeySpec(keyValue, cipherName);
@@ -165,25 +177,32 @@ public abstract class AbstractPrivateKeyObfuscator implements PrivateKeyObfuscat
 
         int updateSize = dataSize - remLen;
         byte[] lastBlock = new byte[blockSize];
-        Arrays.fill(lastBlock, (byte) 10);
-        System.arraycopy(bytes, updateSize, lastBlock, 0, remLen);
 
         // TODO for some reason, calling cipher.update followed by cipher.doFinal does not work
         ByteArrayOutputStream baos = new ByteArrayOutputStream(dataSize);
         try {
+            Arrays.fill(lastBlock, (byte) 10);
+            System.arraycopy(bytes, updateSize, lastBlock, 0, remLen);
+
             try {
                 byte[] buf = cipher.update(bytes, 0, updateSize);
-                baos.write(buf);
+                try {
+                    baos.write(buf);
+                } finally {
+                    Arrays.fill(buf, (byte) 0); // get rid of sensitive data a.s.a.p.
+                }
 
                 buf = cipher.doFinal(lastBlock);
-                baos.write(buf);
+                try {
+                    baos.write(buf);
+                } finally {
+                    Arrays.fill(buf, (byte) 0); // get rid of sensitive data a.s.a.p.
+                }
             } finally {
                 baos.close();
             }
-        } catch (IOException e) {
-            throw new GeneralSecurityException("applyPrivateKeyCipher(" + xform + ")[encrypt=" + encryptIt + "]"
-                                             + " failed (" + e.getClass().getSimpleName() + ")"
-                                             + " to split-write: " + e.getMessage(), e);
+        } finally {
+            Arrays.fill(lastBlock, (byte) 0);
         }
 
         return baos.toByteArray();

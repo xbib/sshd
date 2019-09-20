@@ -41,7 +41,8 @@ public interface NamedResource {
      * Compares 2 {@link NamedResource}s according to their {@link #getName()}
      * value case <U>insensitive</U>
      */
-    Comparator<NamedResource> BY_NAME_COMPARATOR = Comparator.comparing(NAME_EXTRACTOR, String.CASE_INSENSITIVE_ORDER);
+    Comparator<NamedResource> BY_NAME_COMPARATOR =
+        Comparator.comparing(NAME_EXTRACTOR, String.CASE_INSENSITIVE_ORDER);
 
     /**
      * @return The resource name
@@ -62,7 +63,8 @@ public interface NamedResource {
      * @return A comma separated list of factory names
      */
     static String getNames(Collection<? extends NamedResource> resources) {
-        return GenericUtils.join(getNameList(resources), ',');
+        Collection<String> nameList = getNameList(resources);
+        return GenericUtils.join(nameList, ',');
     }
 
     /**
@@ -71,11 +73,12 @@ public interface NamedResource {
      * @param <R>       The generic resource type
      * @param name      Name of the resource - ignored if {@code null}/empty
      * @param c         The {@link Comparator} to decide whether the {@link NamedResource#getName()}
-     *                  matches the {@code name} parameter
+     *                  matches the name parameter
      * @param resources The {@link NamedResource} to check - ignored if {@code null}/empty
      * @return the removed resource from the list or {@code null} if not in the list
      */
-    static <R extends NamedResource> R removeByName(String name, Comparator<? super String> c, Collection<? extends R> resources) {
+    static <R extends NamedResource> R removeByName(
+            String name, Comparator<? super String> c, Collection<? extends R> resources) {
         R r = findByName(name, c, resources);
         if (r != null) {
             resources.remove(r);
@@ -87,17 +90,38 @@ public interface NamedResource {
      * @param <R>       The generic resource type
      * @param name      Name of the resource - ignored if {@code null}/empty
      * @param c         The {@link Comparator} to decide whether the {@link NamedResource#getName()}
-     *                  matches the {@code name} parameter
+     *                  matches the name parameter
      * @param resources The {@link NamedResource} to check - ignored if {@code null}/empty
      * @return The <U>first</U> resource whose name matches the parameter (by invoking
      * {@link Comparator#compare(Object, Object)} - {@code null} if no match found
      */
-    static <R extends NamedResource> R findByName(String name, Comparator<? super String> c, Collection<? extends R> resources) {
+    static <R extends NamedResource> R findByName(
+            String name, Comparator<? super String> c, Collection<? extends R> resources) {
         return GenericUtils.isEmpty(name)
             ? null
             : GenericUtils.stream(resources)
                 .filter(r -> c.compare(name, r.getName()) == 0)
                 .findFirst()
                 .orElse(null);
+    }
+
+    /**
+     * Wraps a name value inside a {@link NamedResource}
+     *
+     * @param name The name value to wrap
+     * @return The wrapper instance
+     */
+    static NamedResource ofName(String name) {
+        return new NamedResource() {
+            @Override
+            public String getName() {
+                return name;
+            }
+
+            @Override
+            public String toString() {
+                return getName();
+            }
+        };
     }
 }

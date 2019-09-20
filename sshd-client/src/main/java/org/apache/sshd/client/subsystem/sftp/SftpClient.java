@@ -46,7 +46,6 @@ import org.apache.sshd.client.subsystem.SubsystemClient;
 import org.apache.sshd.client.subsystem.sftp.extensions.SftpClientExtension;
 import org.apache.sshd.common.subsystem.sftp.SftpConstants;
 import org.apache.sshd.common.subsystem.sftp.SftpHelper;
-import org.apache.sshd.common.subsystem.sftp.SftpUniversalOwnerAndGroup;
 import org.apache.sshd.common.util.GenericUtils;
 import org.apache.sshd.common.util.ValidateUtils;
 import org.apache.sshd.common.util.buffer.BufferUtils;
@@ -82,12 +81,12 @@ public interface SftpClient extends SubsystemClient {
          * The {@link Set} of {@link OpenOption}-s supported by {@link #fromOpenOptions(Collection)}
          */
         public static final Set<OpenOption> SUPPORTED_OPTIONS =
-                Collections.unmodifiableSet(
-                        EnumSet.of(
-                                StandardOpenOption.READ, StandardOpenOption.APPEND,
-                                StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING,
-                                StandardOpenOption.WRITE, StandardOpenOption.CREATE_NEW,
-                                StandardOpenOption.SPARSE));
+            Collections.unmodifiableSet(
+                EnumSet.of(
+                    StandardOpenOption.READ, StandardOpenOption.APPEND,
+                    StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING,
+                    StandardOpenOption.WRITE, StandardOpenOption.CREATE_NEW,
+                    StandardOpenOption.SPARSE));
 
         /**
          * Converts {@link StandardOpenOption}-s into {@link OpenMode}-s
@@ -245,6 +244,11 @@ public interface SftpClient extends SubsystemClient {
             return this;
         }
 
+        public Attributes removeFlag(Attribute flag) {
+            flags.remove(flag);
+            return this;
+        }
+
         public int getType() {
             return type;
         }
@@ -277,10 +281,19 @@ public interface SftpClient extends SubsystemClient {
         }
 
         public void setOwner(String owner) {
-            this.owner = ValidateUtils.checkNotNullAndNotEmpty(owner, "No owner");
-            addFlag(Attribute.OwnerGroup);
-            if (GenericUtils.isEmpty(getGroup())) {
-                setGroup(SftpUniversalOwnerAndGroup.Group.getName());
+            this.owner = owner;
+            /*
+             * According to https://tools.ietf.org/wg/secsh/draft-ietf-secsh-filexfer/draft-ietf-secsh-filexfer-13.txt
+             * section 7.5
+             *
+             *      If either the owner or group field is zero length, the field
+             *      should be considered absent, and no change should be made to
+             *      that specific field during a modification operation.
+             */
+            if (GenericUtils.isEmpty(owner)) {
+                removeFlag(Attribute.OwnerGroup);
+            } else {
+                addFlag(Attribute.OwnerGroup);
             }
         }
 
@@ -294,10 +307,19 @@ public interface SftpClient extends SubsystemClient {
         }
 
         public void setGroup(String group) {
-            this.group = ValidateUtils.checkNotNullAndNotEmpty(group, "No group");
-            addFlag(Attribute.OwnerGroup);
-            if (GenericUtils.isEmpty(getOwner())) {
-                setOwner(SftpUniversalOwnerAndGroup.Owner.getName());
+            this.group = group;
+            /*
+             * According to https://tools.ietf.org/wg/secsh/draft-ietf-secsh-filexfer/draft-ietf-secsh-filexfer-13.txt
+             * section 7.5
+             *
+             *      If either the owner or group field is zero length, the field
+             *      should be considered absent, and no change should be made to
+             *      that specific field during a modification operation.
+             */
+            if (GenericUtils.isEmpty(group)) {
+                removeFlag(Attribute.OwnerGroup);
+            } else {
+                addFlag(Attribute.OwnerGroup);
             }
         }
 
@@ -526,12 +548,9 @@ public interface SftpClient extends SubsystemClient {
     int MIN_BUFFER_SIZE = Byte.MAX_VALUE;
     int MIN_READ_BUFFER_SIZE = MIN_BUFFER_SIZE;
     int MIN_WRITE_BUFFER_SIZE = MIN_BUFFER_SIZE;
-
-
-    int DEFAULT_READ_BUFFER_SIZE = 128 * 1024;
-
-    int DEFAULT_WRITE_BUFFER_SIZE = 128 * 1024;
-
+    int IO_BUFFER_SIZE = 32 * 1024;
+    int DEFAULT_READ_BUFFER_SIZE = IO_BUFFER_SIZE;
+    int DEFAULT_WRITE_BUFFER_SIZE = IO_BUFFER_SIZE;
     long DEFAULT_WAIT_TIMEOUT = TimeUnit.SECONDS.toMillis(15L);
 
     /**
@@ -547,7 +566,7 @@ public interface SftpClient extends SubsystemClient {
      * Default modes for opening a channel if no specific modes specified
      */
     Set<OpenMode> DEFAULT_CHANNEL_MODES =
-            Collections.unmodifiableSet(EnumSet.of(OpenMode.Read, OpenMode.Write));
+        Collections.unmodifiableSet(EnumSet.of(OpenMode.Read, OpenMode.Write));
 
     /**
      * @return The negotiated SFTP protocol version

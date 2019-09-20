@@ -19,12 +19,13 @@
 package org.apache.sshd.common.session;
 
 import java.io.IOException;
+import java.net.SocketAddress;
+import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 
-import org.apache.sshd.common.AttributeStore;
 import org.apache.sshd.common.Closeable;
+import org.apache.sshd.common.FactoryManager;
 import org.apache.sshd.common.FactoryManagerHolder;
-import org.apache.sshd.common.PropertyResolver;
 import org.apache.sshd.common.Service;
 import org.apache.sshd.common.auth.MutableUserHolder;
 import org.apache.sshd.common.channel.ChannelListenerManager;
@@ -32,15 +33,15 @@ import org.apache.sshd.common.channel.throttle.ChannelStreamPacketWriterResolver
 import org.apache.sshd.common.cipher.CipherInformation;
 import org.apache.sshd.common.compression.CompressionInformation;
 import org.apache.sshd.common.forward.PortForwardingEventListenerManager;
+import org.apache.sshd.common.forward.PortForwardingInformationProvider;
 import org.apache.sshd.common.future.KeyExchangeFuture;
 import org.apache.sshd.common.io.IoSession;
 import org.apache.sshd.common.io.IoWriteFuture;
 import org.apache.sshd.common.io.PacketWriter;
 import org.apache.sshd.common.kex.KexFactoryManager;
-import org.apache.sshd.common.kex.KexProposalOption;
 import org.apache.sshd.common.kex.KeyExchange;
 import org.apache.sshd.common.mac.MacInformation;
-import org.apache.sshd.common.util.GenericUtils;
+import org.apache.sshd.common.session.helpers.TimeoutIndicator;
 import org.apache.sshd.common.util.buffer.Buffer;
 
 /**
@@ -50,83 +51,35 @@ import org.apache.sshd.common.util.buffer.Buffer;
  * @author <a href="mailto:dev@mina.apache.org">Apache MINA SSHD Project</a>
  */
 public interface Session
-        extends KexFactoryManager,
+        extends SessionContext,
+                MutableUserHolder,
+                KexFactoryManager,
                 SessionListenerManager,
                 ReservedSessionMessagesManager,
+                SessionDisconnectHandlerManager,
                 ChannelListenerManager,
                 ChannelStreamPacketWriterResolverManager,
                 PortForwardingEventListenerManager,
                 UnknownChannelReferenceHandlerManager,
                 FactoryManagerHolder,
-                PropertyResolver,
-                AttributeStore,
-                Closeable,
-                MutableUserHolder,
-                PacketWriter {
+                PortForwardingInformationProvider,
+                PacketWriter,
+                Closeable {
 
     /**
-     * Default prefix expected for the client / server identification string
-     * @see <A HREF="https://tools.ietf.org/html/rfc4253#section-4.2">RFC 4253 - section 4.2</A>
-     */
-    String DEFAULT_SSH_VERSION_PREFIX = "SSH-2.0-";
-
-    /**
-     * Backward compatible special prefix
-     * @see <A HREF="https://tools.ietf.org/html/rfc4253#section-5">RFC 4253 - section 5</A>
-     */
-    String FALLBACK_SSH_VERSION_PREFIX = "SSH-1.99-";
-
-    /**
-     * Maximum number of characters for any single line sent as part
-     * of the initial handshake - according to
-     * <a href="https://tools.ietf.org/html/rfc4253#section-4.2">RFC 4253 - section 4.2</a>:
+     * Quick indication if this is a server or client session (instead of
+     * having to ask {@code instanceof}).
      *
-     * <p><code>
-     *      The maximum length of the string is 255 characters,
-     *      including the Carriage Return and Line Feed.
-     * </code></p>
+     * @return {@code true} if this is a server session
      */
-    int MAX_VERSION_LINE_LENGTH = 256;
-
-    /**
-     * Timeout status.
-     */
-    enum TimeoutStatus {
-        NoTimeout,
-        AuthTimeout,
-        IdleTimeout
-    }
-
-    /**
-     * Retrieve the client version for this session.
-     *
-     * @return the client version.
-     */
-    String getClientVersion();
-
-    /**
-     * Retrieve the server version for this session.
-     *
-     * @return the server version.
-     */
-    String getServerVersion();
-
-    /**
-     * Retrieve one of the negotiated values during the KEX stage
-     *
-     * @param paramType The request {@link KexProposalOption} value - ignored
-     *                  if {@code null}
-     * @return The negotiated parameter value - {@code null} if invalid
-     * parameter or no negotiated value
-     */
-    String getNegotiatedKexParameter(KexProposalOption paramType);
+    boolean isServerSession();
 
     /**
      * Retrieves current cipher information - <B>Note:</B> may change if
      * key re-exchange executed
      *
      * @param incoming If {@code true} then the cipher for the incoming data,
-     *                 otherwise for the outgoing data
+     * otherwise for the outgoing data
      * @return The {@link CipherInformation} - or {@code null} if not negotiated yet.
      */
     CipherInformation getCipherInformation(boolean incoming);
@@ -136,7 +89,7 @@ public interface Session
      * key re-exchange executed
      *
      * @param incoming If {@code true} then the compression for the incoming data,
-     *                 otherwise for the outgoing data
+     * otherwise for the outgoing data
      * @return The {@link CompressionInformation} - or {@code null} if not negotiated yet.
      */
     CompressionInformation getCompressionInformation(boolean incoming);
@@ -146,7 +99,7 @@ public interface Session
      * key re-exchange executed
      *
      * @param incoming If {@code true} then the MAC for the incoming data,
-     *                 otherwise for the outgoing data
+     * otherwise for the outgoing data
      * @return The {@link MacInformation} - or {@code null} if not negotiated yet.
      */
     MacInformation getMacInformation(boolean incoming);
@@ -156,9 +109,12 @@ public interface Session
      * (5 bytes) for the packet header.
      *
      * @param cmd the SSH command
-     * @return a new buffer ready for write
+     * @return a new buffer (of unknown size) ready for write
+     * @see #createBuffer(byte, int)
      */
-    Buffer createBuffer(byte cmd);
+    default Buffer createBuffer(byte cmd) {
+        return createBuffer(cmd, 0);
+    }
 
     /**
      * Create a new buffer for the specified SSH packet and reserve the needed space
@@ -261,21 +217,46 @@ public interface Session
     <T extends Service> T getService(Class<T> clazz);
 
     /**
-     * @return the {@link IoSession} associated to this session
+     * @return The {@link IoSession} associated to this session
      */
     IoSession getIoSession();
 
-    /**
-     * Re-start idle timeout timer
-     */
-    void resetIdleTimeout();
+    @Override
+    default SocketAddress getLocalAddress() {
+        IoSession s = getIoSession();
+        return (s == null) ? null : s.getLocalAddress();
+    }
+
+    @Override
+    default SocketAddress getRemoteAddress() {
+        IoSession s = getIoSession();
+        return (s == null) ? null : s.getRemoteAddress();
+    }
 
     /**
      * Check if timeout has occurred.
      *
-     * @return the timeout status, never {@code null}
+     * @return the timeout status - never {@code null}
      */
-    TimeoutStatus getTimeoutStatus();
+    TimeoutIndicator getTimeoutStatus();
+
+    /**
+     * @return Timeout value in milliseconds for communication
+     */
+    long getIdleTimeout();
+
+    /**
+     * @return The timestamp value (milliseconds since EPOCH) when timer was started
+     */
+    long getIdleTimeoutStart();
+
+    /**
+     * Re-start idle timeout timer
+     *
+     * @return The timestamp value (milliseconds since EPOCH) when timer was started
+     * @see #getIdleTimeoutStart()
+     */
+    long resetIdleTimeout();
 
     /**
      * @return Timeout value in milliseconds for authentication stage
@@ -283,19 +264,19 @@ public interface Session
     long getAuthTimeout();
 
     /**
-     * @return Timeout value in milliseconds for communication
+     * @return The timestamp value (milliseconds since EPOCH) when timer was started
      */
-    long getIdleTimeout();
-
-    boolean isAuthenticated();
-
-    void setAuthenticated() throws IOException;
+    long getAuthTimeoutStart();
 
     /**
-     * @return The established session identifier - {@code null} if
-     * not yet established
+     * Re-start the authentication timeout timer
+     *
+     * @return The timestamp value (milliseconds since EPOCH) when timer was started
+     * @see #getAuthTimeoutStart()
      */
-    byte[] getSessionId();
+    long resetAuthTimeout();
+
+    void setAuthenticated() throws IOException;
 
     KeyExchange getKex();
 
@@ -312,17 +293,33 @@ public interface Session
 
     /**
      * @param name Service name
+     * @param buffer Extra information provided when the service start request was received
      * @throws Exception If failed to start it
      */
-    void startService(String name) throws Exception;
+    void startService(String name, Buffer buffer) throws Exception;
+
+    @Override
+    default <T> T resolveAttribute(AttributeKey<T> key) {
+        return resolveAttribute(this, key);
+    }
 
     /**
-     * @param version The reported client/server version
-     * @return {@code true} if version not empty and starts with either
-     * {@value #DEFAULT_SSH_VERSION_PREFIX} or {@value #FALLBACK_SSH_VERSION_PREFIX}
+     * Attempts to use the session's attribute, if not found then tries the factory manager
+     *
+     * @param <T> The generic attribute type
+     * @param session The {@link Session} - ignored if {@code null}
+     * @param key The attribute key - never {@code null}
+     * @return Associated value - {@code null} if not found
+     * @see Session#getFactoryManager()
+     * @see FactoryManager#resolveAttribute(FactoryManager, AttributeKey)
      */
-    static boolean isValidVersionPrefix(String version) {
-        return GenericUtils.isNotEmpty(version)
-            && (version.startsWith(DEFAULT_SSH_VERSION_PREFIX) || version.startsWith(FALLBACK_SSH_VERSION_PREFIX));
+    static <T> T resolveAttribute(Session session, AttributeKey<T> key) {
+        Objects.requireNonNull(key, "No key");
+        if (session == null) {
+            return null;
+        }
+
+        T value = session.getAttribute(key);
+        return (value != null) ? value : FactoryManager.resolveAttribute(session.getFactoryManager(), key);
     }
 }

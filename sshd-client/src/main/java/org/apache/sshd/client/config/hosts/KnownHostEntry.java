@@ -20,8 +20,6 @@
 package org.apache.sshd.client.config.hosts;
 
 import java.io.BufferedReader;
-import java.io.File;
-import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -36,12 +34,11 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
-import org.apache.sshd.common.config.SshConfigFileReader;
+import org.apache.sshd.common.config.ConfigFileReaderSupport;
 import org.apache.sshd.common.config.keys.AuthorizedKeyEntry;
 import org.apache.sshd.common.config.keys.PublicKeyEntry;
 import org.apache.sshd.common.util.GenericUtils;
 import org.apache.sshd.common.util.ValidateUtils;
-import org.apache.sshd.common.util.io.IoUtils;
 import org.apache.sshd.common.util.io.NoCloseInputStream;
 import org.apache.sshd.common.util.io.NoCloseReader;
 
@@ -63,7 +60,12 @@ public class KnownHostEntry extends HostPatternsHolder {
     public static final String STD_HOSTS_FILENAME = "known_hosts";
 
     private static final class LazyDefaultConfigFileHolder {
-        private static final Path HOSTS_FILE = PublicKeyEntry.getDefaultKeysFolderPath().resolve(STD_HOSTS_FILENAME);
+        private static final Path HOSTS_FILE =
+            PublicKeyEntry.getDefaultKeysFolderPath().resolve(STD_HOSTS_FILENAME);
+
+        private LazyDefaultConfigFileHolder() {
+            throw new UnsupportedOperationException("No instance allowed");
+        }
     }
 
     private String line;
@@ -124,7 +126,7 @@ public class KnownHostEntry extends HostPatternsHolder {
         }
 
         KnownHostHashValue hash = getHashedEntry();
-        return (hash != null) && hash.isHostMatch(host);
+        return (hash != null) && hash.isHostMatch(host, port);
     }
 
     @Override
@@ -140,10 +142,6 @@ public class KnownHostEntry extends HostPatternsHolder {
         return LazyDefaultConfigFileHolder.HOSTS_FILE;
     }
 
-    public static List<KnownHostEntry> readKnownHostEntries(File file) throws IOException {
-        return readKnownHostEntries(file.toPath(), IoUtils.EMPTY_OPEN_OPTIONS);
-    }
-
     public static List<KnownHostEntry> readKnownHostEntries(Path path, OpenOption... options) throws IOException {
         try (InputStream input = Files.newInputStream(path, options)) {
             return readKnownHostEntries(input, true);
@@ -153,12 +151,6 @@ public class KnownHostEntry extends HostPatternsHolder {
     public static List<KnownHostEntry> readKnownHostEntries(URL url) throws IOException {
         try (InputStream input = url.openStream()) {
             return readKnownHostEntries(input, true);
-        }
-    }
-
-    public static List<KnownHostEntry> readKnownHostEntries(String filePath) throws IOException {
-        try (InputStream inStream = new FileInputStream(filePath)) {
-            return readKnownHostEntries(inStream, true);
         }
     }
 
@@ -191,7 +183,7 @@ public class KnownHostEntry extends HostPatternsHolder {
                 continue;
             }
 
-            int pos = line.indexOf(SshConfigFileReader.COMMENT_CHAR);
+            int pos = line.indexOf(ConfigFileReaderSupport.COMMENT_CHAR);
             if (pos == 0) {
                 continue;
             }

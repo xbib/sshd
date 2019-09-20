@@ -33,9 +33,9 @@ import java.util.Objects;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
 import org.apache.sshd.common.util.GenericUtils;
+import org.apache.logging.log4j.Logger;
+import org.apache.logging.log4j.LogManager;
 
 public abstract class BaseFileSystem<T extends Path> extends FileSystem {
     protected final Logger log;
@@ -145,7 +145,7 @@ public abstract class BaseFileSystem<T extends Path> extends FileSystem {
             log.trace("getPathMatcher({}): {}", syntaxAndPattern, expr);
         }
 
-        final Pattern regex = Pattern.compile(expr);
+        Pattern regex = Pattern.compile(expr);
         return path -> {
             Matcher m = regex.matcher(path.toString());
             return m.matches();

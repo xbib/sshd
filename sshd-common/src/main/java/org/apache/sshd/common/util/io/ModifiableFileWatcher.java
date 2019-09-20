@@ -19,10 +19,10 @@
 
 package org.apache.sshd.common.util.io;
 
-import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
+import java.nio.file.OpenOption;
 import java.nio.file.Path;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.FileTime;
@@ -39,6 +39,7 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import org.apache.sshd.common.util.GenericUtils;
 import org.apache.sshd.common.util.OsUtils;
+import org.apache.sshd.common.util.io.resource.PathResource;
 import org.apache.sshd.common.util.logging.AbstractLoggingBean;
 
 /**
@@ -54,8 +55,10 @@ public class ModifiableFileWatcher extends AbstractLoggingBean {
      * permissions are enforced on key files
      */
     public static final Set<PosixFilePermission> STRICTLY_PROHIBITED_FILE_PERMISSION =
-            Collections.unmodifiableSet(
-                    EnumSet.of(PosixFilePermission.GROUP_WRITE, PosixFilePermission.OTHERS_WRITE));
+        Collections.unmodifiableSet(
+            EnumSet.of(
+                PosixFilePermission.GROUP_WRITE,
+                PosixFilePermission.OTHERS_WRITE));
 
     protected final LinkOption[] options;
 
@@ -63,10 +66,6 @@ public class ModifiableFileWatcher extends AbstractLoggingBean {
     private final AtomicBoolean lastExisted = new AtomicBoolean(false);
     private final AtomicLong lastSize = new AtomicLong(Long.MIN_VALUE);
     private final AtomicLong lastModified = new AtomicLong(-1L);
-
-    public ModifiableFileWatcher(File file) {
-        this(Objects.requireNonNull(file, "No file to watch").toPath());
-    }
 
     public ModifiableFileWatcher(Path file) {
         this(file, IoUtils.getLinkOptions(true));
@@ -181,6 +180,14 @@ public class ModifiableFileWatcher extends AbstractLoggingBean {
         }
 
         resetReloadAttributes();
+    }
+
+    public PathResource toPathResource() {
+        return toPathResource(IoUtils.EMPTY_OPEN_OPTIONS);
+    }
+
+    public PathResource toPathResource(OpenOption... options) {
+        return new PathResource(getPath(), options);
     }
 
     @Override

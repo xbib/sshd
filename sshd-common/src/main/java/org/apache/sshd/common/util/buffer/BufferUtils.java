@@ -23,14 +23,14 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.StreamCorruptedException;
 import java.util.function.IntUnaryOperator;
+import java.util.logging.Level;
 
-import org.apache.logging.log4j.Level;
-import org.apache.logging.log4j.Logger;
 import org.apache.sshd.common.PropertyResolver;
 import org.apache.sshd.common.util.GenericUtils;
 import org.apache.sshd.common.util.NumberUtils;
 import org.apache.sshd.common.util.ValidateUtils;
 import org.apache.sshd.common.util.io.IoUtils;
+import org.apache.sshd.common.util.logging.SimplifiedLog;
 
 /**
  * TODO Add javadoc
@@ -44,7 +44,7 @@ public final class BufferUtils {
 
     public static final String HEXDUMP_CHUNK_SIZE = "sshd-hexdump-chunk-size";
     public static final int DEFAULT_HEXDUMP_CHUNK_SIZE = 64;
-    public static final Level DEFAULT_HEXDUMP_LEVEL = Level.TRACE;
+    public static final Level DEFAULT_HEXDUMP_LEVEL = Level.FINEST;
 
     public static final IntUnaryOperator DEFAULT_BUFFER_GROWTH_FACTOR = BufferUtils::getNextPowerOf2;
 
@@ -65,19 +65,27 @@ public final class BufferUtils {
         throw new UnsupportedOperationException("No instance allowed");
     }
 
-    public static void dumpHex(Logger logger, Level level, String prefix, PropertyResolver resolver, char sep, byte... data) {
+    public static void dumpHex(
+            SimplifiedLog logger, Level level, String prefix, PropertyResolver resolver, char sep, byte... data) {
         dumpHex(logger, level, prefix, resolver, sep, data, 0, NumberUtils.length(data));
     }
 
-    public static void dumpHex(Logger logger, Level level, String prefix, PropertyResolver resolver, char sep, byte[] data, int offset, int len) {
-        dumpHex(logger, level, prefix, sep, resolver.getIntProperty(HEXDUMP_CHUNK_SIZE, DEFAULT_HEXDUMP_CHUNK_SIZE), data, offset, len);
+    public static void dumpHex(
+            SimplifiedLog logger, Level level, String prefix, PropertyResolver resolver,
+            char sep, byte[] data, int offset, int len) {
+        dumpHex(logger, level, prefix, sep,
+            resolver.getIntProperty(HEXDUMP_CHUNK_SIZE, DEFAULT_HEXDUMP_CHUNK_SIZE),
+            data, offset, len);
     }
 
-    public static void dumpHex(Logger logger, Level level, String prefix, char sep, int chunkSize, byte... data) {
+    public static void dumpHex(
+            SimplifiedLog logger, Level level, String prefix, char sep, int chunkSize, byte... data) {
         dumpHex(logger, level, prefix, sep, chunkSize, data, 0, NumberUtils.length(data));
     }
 
-    public static void dumpHex(Logger logger, Level level, String prefix, char sep, int chunkSize, byte[] data, int offset, int len) {
+    public static void dumpHex(
+            SimplifiedLog logger, Level level, String prefix, char sep,
+            int chunkSize, byte[] data, int offset, int len) {
         if ((logger == null) || (level == null) || (!logger.isEnabled(level))) {
             return;
         }
@@ -151,7 +159,9 @@ public final class BufferUtils {
         return appendHex(sb, array, 0, NumberUtils.length(array), sep);
     }
 
-    public static <A extends Appendable> A appendHex(A sb, byte[] array, int offset, int len, char sep) throws IOException {
+    public static <A extends Appendable> A appendHex(
+            A sb, byte[] array, int offset, int len, char sep)
+                throws IOException {
         if (len <= 0) {
             return sb;
         }
@@ -228,7 +238,9 @@ public final class BufferUtils {
      * @throws NumberFormatException If invalid HEX characters found
      * @see #decodeHex(OutputStream, char, CharSequence, int, int)
      */
-    public static <S extends OutputStream> int decodeHex(S stream, char separator, CharSequence csq) throws IOException {
+    public static <S extends OutputStream> int decodeHex(
+            S stream, char separator, CharSequence csq)
+                throws IOException {
         return decodeHex(stream, separator, csq, 0, GenericUtils.length(csq));
     }
 
@@ -244,7 +256,9 @@ public final class BufferUtils {
      * @throws IllegalArgumentException If invalid HEX sequence length
      * @throws NumberFormatException If invalid HEX characters found
      */
-    public static <S extends OutputStream> int decodeHex(S stream, char separator, CharSequence csq, int start, int end) throws IOException {
+    public static <S extends OutputStream> int decodeHex(
+            S stream, char separator, CharSequence csq, int start, int end)
+                throws IOException {
         int len = end - start;
         ValidateUtils.checkTrue(len >= 0, "Bad HEX sequence length: %d", len);
 
@@ -281,7 +295,7 @@ public final class BufferUtils {
      * @param input The {@link InputStream}
      * @param buf   Work buffer to use
      * @return The read 32-bit value
-     * @throws IOException If failed to read 4 bytes or not enough room in
+     * @throws IOException If failed to read 4 bytes or not enough room in work buffer
      * @see #readInt(InputStream, byte[], int, int)
      */
     public static int readInt(InputStream input, byte[] buf) throws IOException {
@@ -296,8 +310,7 @@ public final class BufferUtils {
      * @param offset Offset in buffer to us
      * @param len    Available length - must have at least 4 bytes available
      * @return The read 32-bit value
-     * @throws IOException If failed to read 4 bytes or not enough room in
-     *                     work buffer
+     * @throws IOException If failed to read 4 bytes or not enough room in work buffer
      * @see #readUInt(InputStream, byte[], int, int)
      */
     public static int readInt(InputStream input, byte[] buf, int offset, int len) throws IOException {
@@ -310,7 +323,7 @@ public final class BufferUtils {
      * @param input The {@link InputStream}
      * @param buf   Work buffer to use
      * @return The read 32-bit value
-     * @throws IOException If failed to read 4 bytes or not enough room in
+     * @throws IOException If failed to read 4 bytes or not enough room in work buffer
      * @see #readUInt(InputStream, byte[], int, int)
      */
     public static long readUInt(InputStream input, byte[] buf) throws IOException {
@@ -325,8 +338,7 @@ public final class BufferUtils {
      * @param offset Offset in buffer to us
      * @param len    Available length - must have at least 4 bytes available
      * @return The read 32-bit value
-     * @throws IOException If failed to read 4 bytes or not enough room in
-     *                     work buffer
+     * @throws IOException If failed to read 4 bytes or not enough room in work buffer
      * @see #getUInt(byte[], int, int)
      */
     public static long readUInt(InputStream input, byte[] buf, int offset, int len) throws IOException {
@@ -345,8 +357,8 @@ public final class BufferUtils {
 
     /**
      * @param buf A buffer holding a 32-bit unsigned integer in <B>big endian</B>
-     *            format. <B>Note:</B> if more than 4 bytes are available, then only the
-     *            <U>first</U> 4 bytes in the buffer will be used
+     * format. <B>Note:</B> if more than 4 bytes are available, then only the
+     * <U>first</U> 4 bytes in the buffer will be used
      * @return The result as a {@code long} whose 32 high-order bits are zero
      * @see #getUInt(byte[], int, int)
      */
@@ -355,12 +367,11 @@ public final class BufferUtils {
     }
 
     /**
-     * @param buf A buffer holding a 32-bit unsigned integer in <B>big endian</B>
-     *            format.
+     * @param buf A buffer holding a 32-bit unsigned integer in <B>big endian</B> format.
      * @param off The offset of the data in the buffer
      * @param len The available data length. <B>Note:</B> if more than 4 bytes
-     *            are available, then only the <U>first</U> 4 bytes in the buffer will be
-     *            used (starting at the specified {@code offset})
+     * are available, then only the <U>first</U> 4 bytes in the buffer will be
+     * used (starting at the specified offset)
      * @return The result as a {@code long} whose 32 high-order bits are zero
      */
     public static long getUInt(byte[] buf, int off, int len) {
@@ -381,7 +392,7 @@ public final class BufferUtils {
      * @param output The {@link OutputStream} to write the value
      * @param value  The 32-bit value
      * @param buf    A work buffer to use - must have enough space to contain 4 bytes
-     * @throws IOException If failed to write the value or work buffer to small
+     * @throws IOException If failed to write the value or work buffer too small
      * @see #writeInt(OutputStream, int, byte[], int, int)
      */
     public static void writeInt(OutputStream output, int value, byte[] buf) throws IOException {
@@ -396,10 +407,12 @@ public final class BufferUtils {
      * @param buf    A work buffer to use - must have enough space to contain 4 bytes
      * @param off    The offset to write the value
      * @param len    The available space
-     * @throws IOException If failed to write the value or work buffer to small
+     * @throws IOException If failed to write the value or work buffer too small
      * @see #writeUInt(OutputStream, long, byte[], int, int)
      */
-    public static void writeInt(OutputStream output, int value, byte[] buf, int off, int len) throws IOException {
+    public static void writeInt(
+            OutputStream output, int value, byte[] buf, int off, int len)
+                throws IOException {
         writeUInt(output, value & 0xFFFFFFFFL, buf, off, len);
     }
 
@@ -409,7 +422,7 @@ public final class BufferUtils {
      * @param output The {@link OutputStream} to write the value
      * @param value  The 32-bit value
      * @param buf    A work buffer to use - must have enough space to contain 4 bytes
-     * @throws IOException If failed to write the value or work buffer to small
+     * @throws IOException If failed to write the value or work buffer too small
      * @see #writeUInt(OutputStream, long, byte[], int, int)
      */
     public static void writeUInt(OutputStream output, long value, byte[] buf) throws IOException {
@@ -427,7 +440,9 @@ public final class BufferUtils {
      * @throws IOException If failed to write the value or work buffer to small
      * @see #putUInt(long, byte[], int, int)
      */
-    public static void writeUInt(OutputStream output, long value, byte[] buf, int off, int len) throws IOException {
+    public static void writeUInt(
+            OutputStream output, long value, byte[] buf, int off, int len)
+                throws IOException {
         try {
             int writeLen = putUInt(value, buf, off, len);
             output.write(buf, off, writeLen);
@@ -502,7 +517,11 @@ public final class BufferUtils {
 
     public static int getNextPowerOf2(int value) {
         // for 0-7 return 8
-        return (value < Byte.SIZE) ? Byte.SIZE : NumberUtils.getNextPowerOf2(value);
+        return (value < Byte.SIZE)
+                ? Byte.SIZE
+                : (value > (1 << 30))
+                    ? value
+                    : NumberUtils.getNextPowerOf2(value);
     }
 
     /**

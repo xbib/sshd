@@ -18,6 +18,7 @@
  */
 package org.apache.sshd.common.session;
 
+import java.util.List;
 import java.util.Map;
 
 import org.apache.sshd.common.kex.KexProposalOption;
@@ -39,6 +40,19 @@ public interface SessionListener extends SshdEventListener {
      * @param session The created {@link Session}
      */
     default void sessionCreated(Session session) {
+        // ignored
+    }
+
+    /**
+     * The peer's identification version was received
+     *
+     * @param session The {@link Session} instance
+     * @param version The retrieved identification version
+     * @param extraLines Extra data preceding the identification
+     * @see <A HREF="https://tools.ietf.org/html/rfc4253#section-4.2">RFC 4253 - section 4.2 - Protocol Version Exchange</A>
+     */
+    default void sessionPeerIdentificationReceived(
+            Session session, String version, List<String> extraLines) {
         // ignored
     }
 
@@ -90,6 +104,21 @@ public interface SessionListener extends SshdEventListener {
      * @param t The caught exception
      */
     default void sessionException(Session session, Throwable t) {
+        // ignored
+    }
+
+    /**
+     * Invoked when {@code SSH_MSG_DISCONNECT} message was sent/received
+     *
+     * @param session The referenced {@link Session}
+     * @param reason The signaled reason code
+     * @param msg The provided description message (may be empty)
+     * @param language The language tag indicator (may be empty)
+     * @param initiator Whether the session is the sender or recipient of the message
+     * @see <a href="https://tools.ietf.org/html/rfc4253#section-11.1">RFC 4253 - section 11.1</a>
+     */
+    default void sessionDisconnect(
+            Session session, int reason, String msg, String language, boolean initiator) {
         // ignored
     }
 

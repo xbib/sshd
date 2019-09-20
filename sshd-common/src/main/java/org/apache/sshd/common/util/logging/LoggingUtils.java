@@ -27,15 +27,17 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.NavigableMap;
 import java.util.Objects;
 import java.util.TreeMap;
+import java.util.function.Consumer;
 import java.util.function.Predicate;
 import java.util.logging.Level;
 
-import org.apache.logging.log4j.Logger;
 import org.apache.sshd.common.util.GenericUtils;
 import org.apache.sshd.common.util.NumberUtils;
 import org.apache.sshd.common.util.ReflectionUtils;
+import org.apache.logging.log4j.Logger;
 
 /**
  * @author <a href="mailto:dev@mina.apache.org">Apache MINA SSHD Project</a>
@@ -53,11 +55,11 @@ public final class LoggingUtils {
      *
      * @param clazz The {@link Class} to query
      * @param commonPrefix The expected common prefix
-     * @return A {@link Map} of all the matching fields, where key=the field's {@link Integer}
+     * @return A {@link NavigableMap} of all the matching fields, where key=the field's {@link Integer}
      * value and mapping=the field's name
      * @see #generateMnemonicMap(Class, Predicate)
      */
-    public static Map<Integer, String> generateMnemonicMap(Class<?> clazz, final String commonPrefix) {
+    public static NavigableMap<Integer, String> generateMnemonicMap(Class<?> clazz, final String commonPrefix) {
         return generateMnemonicMap(clazz, f -> {
             String name = f.getName();
             return name.startsWith(commonPrefix);
@@ -72,17 +74,17 @@ public final class LoggingUtils {
      * @param clazz The {@link Class} to query
      * @param acceptor The {@link Predicate} used to decide whether to process the {@link Field}
      * (besides being a {@link Number} and {@code public static final}).
-     * @return A {@link Map} of all the matching fields, where key=the field's {@link Integer}
+     * @return A {@link NavigableMap} of all the matching fields, where key=the field's {@link Integer}
      * value and mapping=the field's name
      * @see #getMnemonicFields(Class, Predicate)
      */
-    public static Map<Integer, String> generateMnemonicMap(Class<?> clazz, Predicate<? super Field> acceptor) {
+    public static NavigableMap<Integer, String> generateMnemonicMap(Class<?> clazz, Predicate<? super Field> acceptor) {
         Collection<Field> fields = getMnemonicFields(clazz, acceptor);
         if (GenericUtils.isEmpty(fields)) {
-            return Collections.emptyMap();
+            return Collections.emptyNavigableMap();
         }
 
-        Map<Integer, String> result = new TreeMap<>(Comparator.naturalOrder());
+        NavigableMap<Integer, String> result = new TreeMap<>(Comparator.naturalOrder());
         for (Field f : fields) {
             String name = f.getName();
             try {
@@ -300,5 +302,248 @@ public final class LoggingUtils {
         } else {
             return logger.isTraceEnabled();
         }
+    }
+
+    /**
+     * @param <T> Generic message type consumer
+     * @param logger The {@link Logger} instance to use
+     * @param level The log {@link Level} mapped as follows:
+     *
+     * <UL>
+     *     <LI>{@link Level#OFF} - {@link #nologClosure(Logger)}</LI>
+     *     <LI>{@link Level#SEVERE} - {@link #errorClosure(Logger)}</LI>
+     *     <LI>{@link Level#WARNING} - {@link #warnClosure(Logger)}</LI>
+     *     <LI>{@link Level#INFO}/{@link Level#ALL} - {@link #infoClosure(Logger)}</LI>
+     *     <LI>{@link Level#CONFIG}/{@link Level#FINE} - {@link #debugClosure(Logger)}</LI>
+     *     <LI>All others - {@link #traceClosure(Logger)}</LI>
+     * </UL>
+     * @return A consumer whose {@link Consumer#accept(Object)} method logs the
+     * {@link String#valueOf(Object)} value of its argument if the specific level is enabled
+     */
+    public static <T> Consumer<T> loggingClosure(Logger logger, Level level) {
+        return loggingClosure(logger, level, null);
+    }
+
+    public static <T> Consumer<T> loggingClosure(Logger logger, Level level, Throwable t) {
+        Objects.requireNonNull(level, "No level provided");
+
+        if (Level.OFF.equals(level)) {
+            return nologClosure(logger);
+        } else if (Level.SEVERE.equals(level)) {
+            return errorClosure(logger, t);
+        } else if (Level.WARNING.equals(level)) {
+            return warnClosure(logger, t);
+        } else if (Level.INFO.equals(level) || Level.ALL.equals(level)) {
+            return infoClosure(logger, t);
+        } else if (Level.CONFIG.equals(level) || Level.FINE.equals(level)) {
+            return debugClosure(logger, t);
+        } else {
+            return traceClosure(logger, t);
+        }
+    }
+
+    /**
+     * @param <T> Generic message type consumer
+     * @param logger The {@link Logger} instance to use
+     * @return A consumer whose {@link Consumer#accept(Object)} method logs nothing when invoked
+     */
+    public static <T> Consumer<T> nologClosure(Logger logger) {
+        Objects.requireNonNull(logger, "No logger provided");
+        return t -> { /* do nothing */ };
+    }
+
+    /**
+     * @param <T> Generic message type consumer
+     * @param logger The {@link Logger} instance to use
+     * @return A consumer whose {@link Consumer#accept(Object)} method logs the
+     * {@link String#valueOf(Object)} value of its argument if {@link Logger#isErrorEnabled()}
+     */
+    public static <T> Consumer<T> errorClosure(Logger logger) {
+        return errorClosure(logger, null);
+    }
+
+    /**
+     * @param <T> Generic message type consumer
+     * @param logger The {@link Logger} instance to use
+     * @param thrown A {@link Throwable} to attach to the message - ignored if {@code null}
+     * @return A consumer whose {@link Consumer#accept(Object)} method logs the
+     * {@link String#valueOf(Object)} value of its argument if {@link Logger#isErrorEnabled()}
+     */
+    public static <T> Consumer<T> errorClosure(Logger logger, Throwable thrown) {
+        Objects.requireNonNull(logger, "No logger provided");
+        return new Consumer<T>() {
+            @Override
+            public void accept(T input) {
+                if (logger.isErrorEnabled()) {
+                    String msg = String.valueOf(input);
+                    if (thrown == null) {
+                        logger.error(msg);
+                    } else {
+                        logger.error(msg, thrown);
+                    }
+                }
+            }
+
+            @Override
+            public String toString() {
+                return "ERROR";
+            }
+        };
+    }
+
+    /**
+     * @param <T> Generic message type consumer
+     * @param logger The {@link Logger} instance to use
+     * @return A consumer whose {@link Consumer#accept(Object)} method logs the
+     * {@link String#valueOf(Object)} value of its argument if {@link Logger#isWarnEnabled()}
+     */
+    public static <T> Consumer<T> warnClosure(Logger logger) {
+        return warnClosure(logger, null);
+    }
+
+    /**
+     * @param <T> Generic message type consumer
+     * @param logger The {@link Logger} instance to use
+     * @param thrown A {@link Throwable} to attach to the message - ignored if {@code null}
+     * @return A consumer whose {@link Consumer#accept(Object)} method logs the {@link String#valueOf(Object)}
+     * value of its argument if {@link Logger#isWarnEnabled()}
+     */
+    public static <T> Consumer<T> warnClosure(Logger logger, Throwable thrown) {
+        Objects.requireNonNull(logger, "No logger provided");
+        return new Consumer<T>() {
+            @Override
+            public void accept(T input) {
+                if (logger.isWarnEnabled()) {
+                    String msg = String.valueOf(input);
+                    if (thrown == null) {
+                        logger.warn(msg);
+                    } else {
+                        logger.warn(msg, thrown);
+                    }
+                }
+            }
+
+            @Override
+            public String toString() {
+                return "WARN";
+            }
+        };
+    }
+
+    /**
+     * @param <T> Generic message type consumer
+     * @param logger The {@link Logger} instance to use
+     * @return A consumer whose {@link Consumer#accept(Object)} method logs the {@link String#valueOf(Object)}
+     * value of its argument if {@link Logger#isInfoEnabled()}
+     */
+    public static <T> Consumer<T> infoClosure(Logger logger) {
+        return infoClosure(logger, null);
+    }
+
+    /**
+     * @param <T> Generic message type consumer
+     * @param logger The {@link Logger} instance to use
+     * @param thrown A {@link Throwable} to attach to the message - ignored if {@code null}
+     * @return A consumer whose {@link Consumer#accept(Object)} method logs the
+     * {@link String#valueOf(Object)} value of its argument if {@link Logger#isInfoEnabled()}
+     */
+    public static <T> Consumer<T> infoClosure(Logger logger, Throwable thrown) {
+        Objects.requireNonNull(logger, "No logger provided");
+        return new Consumer<T>() {
+            @Override
+            public void accept(T input) {
+                if (logger.isInfoEnabled()) {
+                    String msg = String.valueOf(input);
+                    if (thrown == null) {
+                        logger.info(msg);
+                    } else {
+                        logger.info(msg, thrown);
+                    }
+                }
+            }
+
+            @Override
+            public String toString() {
+                return "INFO";
+            }
+        };
+    }
+
+    /**
+     * @param <T> Generic message type consumer
+     * @param logger The {@link Logger} instance to use
+     * @return A consumer whose {@link Consumer#accept(Object)} method logs the
+     * {@link String#valueOf(Object)} value of its argument if {@link Logger#isDebugEnabled()}
+     */
+    public static <T> Consumer<T> debugClosure(Logger logger) {
+        return debugClosure(logger, null);
+    }
+
+    /**
+     * @param <T> Generic message type consumer
+     * @param logger The {@link Logger} instance to use
+     * @param thrown A {@link Throwable} to attach to the message - ignored if {@code null}
+     * @return A consumer whose {@link Consumer#accept(Object)} method logs the
+     * {@link String#valueOf(Object)} value of its argument if {@link Logger#isDebugEnabled()}
+     */
+    public static <T> Consumer<T> debugClosure(Logger logger, Throwable thrown) {
+        Objects.requireNonNull(logger, "No logger provided");
+        return new Consumer<T>() {
+            @Override
+            public void accept(T input) {
+                if (logger.isDebugEnabled()) {
+                    String msg = String.valueOf(input);
+                    if (thrown == null) {
+                        logger.debug(msg);
+                    } else {
+                        logger.debug(msg, thrown);
+                    }
+                }
+            }
+
+            @Override
+            public String toString() {
+                return "DEBUG";
+            }
+        };
+    }
+
+    /**
+     * @param <T> Generic message type consumer
+     * @param logger The {@link Logger} instance to use
+     * @return A consumer whose {@link Consumer#accept(Object)} method logs the
+     * {@link String#valueOf(Object)} value of its argument if {@link Logger#isTraceEnabled()}
+     */
+    public static <T> Consumer<T> traceClosure(Logger logger) {
+        return traceClosure(logger, null);
+    }
+
+    /**
+     * @param <T> Generic message type consumer
+     * @param logger The {@link Logger} instance to use
+     * @param thrown A {@link Throwable} to attach to the message - ignored if {@code null}
+     * @return A consumer whose {@link Consumer#accept(Object)} method logs the
+     * {@link String#valueOf(Object)} value of its argument if {@link Logger#isTraceEnabled()}
+     */
+    public static <T> Consumer<T> traceClosure(Logger logger, Throwable thrown) {
+        Objects.requireNonNull(logger, "No logger provided");
+        return new Consumer<T>() {
+            @Override
+            public void accept(T input) {
+                if (logger.isTraceEnabled()) {
+                    String msg = String.valueOf(input);
+                    if (thrown == null) {
+                        logger.trace(msg);
+                    } else {
+                        logger.trace(msg, thrown);
+                    }
+                }
+            }
+
+            @Override
+            public String toString() {
+                return "TRACE";
+            }
+        };
     }
 }

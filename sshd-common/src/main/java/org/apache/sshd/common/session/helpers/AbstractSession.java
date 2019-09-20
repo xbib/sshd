@@ -20,9 +20,10 @@ package org.apache.sshd.common.session.helpers;
 
 import java.io.IOException;
 import java.io.InterruptedIOException;
-import java.net.SocketAddress;
+import java.net.ProtocolException;
 import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
+import java.security.GeneralSecurityException;
 import java.util.AbstractMap.SimpleImmutableEntry;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -34,31 +35,20 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Queue;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArraySet;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
-import org.apache.logging.log4j.LogManager;
-import org.apache.sshd.common.AttributeStore;
 import org.apache.sshd.common.Closeable;
 import org.apache.sshd.common.Factory;
 import org.apache.sshd.common.FactoryManager;
 import org.apache.sshd.common.NamedFactory;
-import org.apache.sshd.common.NamedResource;
-import org.apache.sshd.common.PropertyResolver;
-import org.apache.sshd.common.PropertyResolverUtils;
 import org.apache.sshd.common.RuntimeSshException;
 import org.apache.sshd.common.Service;
 import org.apache.sshd.common.SshConstants;
 import org.apache.sshd.common.SshException;
 import org.apache.sshd.common.channel.ChannelListener;
-import org.apache.sshd.common.channel.throttle.ChannelStreamPacketWriterResolver;
-import org.apache.sshd.common.channel.throttle.ChannelStreamPacketWriterResolverManager;
 import org.apache.sshd.common.cipher.Cipher;
 import org.apache.sshd.common.cipher.CipherInformation;
 import org.apache.sshd.common.compression.Compression;
@@ -66,26 +56,26 @@ import org.apache.sshd.common.compression.CompressionInformation;
 import org.apache.sshd.common.digest.Digest;
 import org.apache.sshd.common.forward.PortForwardingEventListener;
 import org.apache.sshd.common.future.DefaultKeyExchangeFuture;
-import org.apache.sshd.common.future.DefaultSshFuture;
 import org.apache.sshd.common.future.KeyExchangeFuture;
 import org.apache.sshd.common.future.SshFutureListener;
 import org.apache.sshd.common.io.IoSession;
 import org.apache.sshd.common.io.IoWriteFuture;
-import org.apache.sshd.common.kex.AbstractKexFactoryManager;
 import org.apache.sshd.common.kex.KexProposalOption;
 import org.apache.sshd.common.kex.KexState;
 import org.apache.sshd.common.kex.KeyExchange;
+import org.apache.sshd.common.kex.extension.KexExtensionHandler;
+import org.apache.sshd.common.kex.extension.KexExtensionHandler.AvailabilityPhase;
+import org.apache.sshd.common.kex.extension.KexExtensionHandler.KexPhase;
+import org.apache.sshd.common.kex.extension.KexExtensions;
 import org.apache.sshd.common.mac.Mac;
 import org.apache.sshd.common.mac.MacInformation;
 import org.apache.sshd.common.random.Random;
 import org.apache.sshd.common.session.ReservedSessionMessagesHandler;
-import org.apache.sshd.common.session.Session;
+import org.apache.sshd.common.session.SessionDisconnectHandler;
 import org.apache.sshd.common.session.SessionListener;
 import org.apache.sshd.common.session.SessionWorkBuffer;
-import org.apache.sshd.common.session.UnknownChannelReferenceHandler;
 import org.apache.sshd.common.util.EventListenerUtils;
 import org.apache.sshd.common.util.GenericUtils;
-import org.apache.sshd.common.util.Invoker;
 import org.apache.sshd.common.util.NumberUtils;
 import org.apache.sshd.common.util.Readable;
 import org.apache.sshd.common.util.ValidateUtils;
@@ -108,7 +98,7 @@ import org.apache.sshd.common.util.buffer.ByteArrayBuffer;
  *
  * @author <a href="mailto:dev@mina.apache.org">Apache MINA SSHD Project</a>
  */
-public abstract class AbstractSession extends AbstractKexFactoryManager implements Session {
+public abstract class AbstractSession extends SessionHelper {
     /**
      * Name of the property where this session is stored in the attributes of the
      * underlying MINA session. See {@link #getSession(IoSession, boolean)}
@@ -117,25 +107,9 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
     public static final String SESSION = "org.apache.sshd.session";
 
     /**
-     * Client or server side
-     */
-    protected final boolean isServer;
-    /**
-     * The underlying MINA session
-     */
-    protected final IoSession ioSession;
-    /**
      * The pseudo random generator
      */
     protected final Random random;
-    /**
-     * Boolean indicating if this session has been authenticated or not
-     */
-    protected boolean authed;
-    /**
-     * The name of the authenticated user
-     */
-    protected String username;
 
     /**
      * Session listeners container
@@ -163,10 +137,12 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
     protected String clientVersion;
     // if empty then means not-initialized
     protected final Map<KexProposalOption, String> serverProposal = new EnumMap<>(KexProposalOption.class);
+    protected final Map<KexProposalOption, String> unmodServerProposal = Collections.unmodifiableMap(serverProposal);
     protected final Map<KexProposalOption, String> clientProposal = new EnumMap<>(KexProposalOption.class);
+    protected final Map<KexProposalOption, String> unmodClientProposal = Collections.unmodifiableMap(clientProposal);
     protected final Map<KexProposalOption, String> negotiationResult = new EnumMap<>(KexProposalOption.class);
-    protected byte[] i_c; // the payload of the client's SSH_MSG_KEXINIT
-    protected byte[] i_s; // the payload of the factoryManager's SSH_MSG_KEXINIT
+    protected final Map<KexProposalOption, String> unmodNegotiationResult = Collections.unmodifiableMap(negotiationResult);
+
     protected KeyExchange kex;
     protected Boolean firstKexPacketFollows;
     protected final AtomicReference<KexState> kexState = new AtomicReference<>(KexState.UNKNOWN);
@@ -193,11 +169,6 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
     protected final Object encodeLock = new Object();
     protected final Object decodeLock = new Object();
     protected final Object requestLock = new Object();
-
-    // Session timeout measurements
-    protected long authTimeoutStart = System.currentTimeMillis();
-    protected long idleTimeoutStart = System.currentTimeMillis();
-    protected final AtomicReference<TimeoutStatus> timeoutStatus = new AtomicReference<>(TimeoutStatus.NoTimeout);
 
     /*
      * Rekeying
@@ -226,40 +197,23 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
     protected final AtomicLong ignorePacketsCount = new AtomicLong(FactoryManager.DEFAULT_IGNORE_MESSAGE_FREQUENCY);
 
     /**
-     * The factory manager used to retrieve factories of Ciphers, Macs and other objects
-     */
-    private final FactoryManager factoryManager;
-
-    /**
-     * The session specific properties
-     */
-    private final Map<String, Object> properties = new ConcurrentHashMap<>();
-
-    /**
      * Used to wait for global requests result synchronous wait
      */
     private final AtomicReference<Object> requestResult = new AtomicReference<>();
 
-    /**
-     * Session specific attributes
-     */
-    private final Map<AttributeKey<?>, Object> attributes = new ConcurrentHashMap<>();
-    private ReservedSessionMessagesHandler reservedSessionMessagesHandler;
-    private ChannelStreamPacketWriterResolver channelStreamPacketWriterResolver;
-    private UnknownChannelReferenceHandler unknownChannelReferenceHandler;
+    private byte[] clientKexData;    // the payload of the client's SSH_MSG_KEXINIT
+    private byte[] serverKexData; // the payload of the factoryManager's SSH_MSG_KEXINIT
 
     /**
      * Create a new session.
      *
-     * @param isServer       {@code true} if this is a server session, {@code false} if client one
+     * @param serverSession  {@code true} if this is a server session, {@code false} if client one
      * @param factoryManager the factory manager
-     * @param ioSession      the underlying MINA session
+     * @param ioSession      the underlying I/O session
      */
-    protected AbstractSession(boolean isServer, FactoryManager factoryManager, IoSession ioSession) {
-        super(Objects.requireNonNull(factoryManager, "No factory manager provided"));
-        this.isServer = isServer;
-        this.factoryManager = factoryManager;
-        this.ioSession = ioSession;
+    protected AbstractSession(boolean serverSession, FactoryManager factoryManager, IoSession ioSession) {
+        super(serverSession, factoryManager, ioSession);
+
         this.decoderBuffer = new SessionWorkBuffer(this);
 
         attachSession(ioSession, this);
@@ -275,81 +229,14 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
         tunnelListenerProxy = EventListenerUtils.proxyWrapper(PortForwardingEventListener.class, loader, tunnelListeners);
     }
 
-    protected void signalSessionCreated(IoSession ioSession) throws Exception {
-        try {
-            invokeSessionSignaller(l -> {
-                signalSessionCreated(l);
-                return null;
-            });
-        } catch (Throwable err) {
-            Throwable e = GenericUtils.peelException(err);
-            if (log.isDebugEnabled()) {
-                log.debug("Failed ({}) to announce session={} created: {}",
-                          e.getClass().getSimpleName(), ioSession, e.getMessage());
-            }
-            if (log.isTraceEnabled()) {
-                log.trace("Session=" + ioSession + " creation failure details", e);
-            }
-            if (e instanceof Exception) {
-                throw (Exception) e;
-            } else {
-                throw new RuntimeSshException(e);
-            }
-        }
-    }
-
-    protected void signalSessionCreated(SessionListener listener) {
-        if (listener == null) {
-            return;
-        }
-        listener.sessionCreated(this);
-    }
-
-    /**
-     * Retrieve the session from the MINA session.
-     * If the session has not been attached, an {@link IllegalStateException}
-     * will be thrown
-     *
-     * @param ioSession the MINA session
-     * @return the session attached to the MINA session
-     * @see #getSession(IoSession, boolean)
-     */
-    public static AbstractSession getSession(IoSession ioSession) {
-        return getSession(ioSession, false);
-    }
-
-    /**
-     * Retrieve the session from the MINA session.
-     * If the session has not been attached and {@code allowNull} is <code>false</code>,
-     * an {@link IllegalStateException} will be thrown, else a {@code null} will
-     * be returned
-     *
-     * @param ioSession the MINA session
-     * @param allowNull if <code>true</code>, a {@code null} value may be
-     *                  returned if no session is attached
-     * @return the session attached to the MINA session or {@code null}
-     */
-    public static AbstractSession getSession(IoSession ioSession, boolean allowNull) {
-        AbstractSession session = (AbstractSession) ioSession.getAttribute(SESSION);
-        if ((session == null) && (!allowNull)) {
-            throw new IllegalStateException("No session available");
-        }
-        return session;
-    }
-
-    /**
-     * Attach a session to the MINA session
-     *
-     * @param ioSession the MINA session
-     * @param session   the session to attach
-     */
-    public static void attachSession(IoSession ioSession, AbstractSession session) {
-        Objects.requireNonNull(ioSession, "No I/O session").setAttribute(SESSION, Objects.requireNonNull(session, "No SSH session"));
-    }
-
     @Override
     public String getServerVersion() {
         return serverVersion;
+    }
+
+    @Override
+    public Map<KexProposalOption, String> getServerKexProposals() {
+        return unmodServerProposal;
     }
 
     @Override
@@ -358,8 +245,18 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
     }
 
     @Override
+    public Map<KexProposalOption, String> getClientKexProposals() {
+        return unmodClientProposal;
+    }
+
+    @Override
     public KeyExchange getKex() {
         return kex;
+    }
+
+    @Override
+    public KexState getKexState() {
+        return kexState.get();
     }
 
     @Override
@@ -369,59 +266,8 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
     }
 
     @Override
-    public IoSession getIoSession() {
-        return ioSession;
-    }
-
-    /**
-     * @param knownAddress Any externally set peer address - e.g., due to some
-     * proxy mechanism meta-data
-     * @return The external address if not {@code null} otherwise, the {@code IoSession}
-     * peer address
-     */
-    protected SocketAddress resolvePeerAddress(SocketAddress knownAddress) {
-        if (knownAddress != null) {
-            return knownAddress;
-        }
-
-        IoSession s = getIoSession();
-        return (s == null) ? null : s.getRemoteAddress();
-    }
-
-    @Override
-    public FactoryManager getFactoryManager() {
-        return factoryManager;
-    }
-
-    @Override
-    public PropertyResolver getParentPropertyResolver() {
-        return getFactoryManager();
-    }
-
-    @Override
-    public Map<String, Object> getProperties() {
-        return properties;
-    }
-
-    @Override
-    public UnknownChannelReferenceHandler getUnknownChannelReferenceHandler() {
-        return unknownChannelReferenceHandler;
-    }
-
-    @Override
-    public void setUnknownChannelReferenceHandler(UnknownChannelReferenceHandler unknownChannelReferenceHandler) {
-        this.unknownChannelReferenceHandler = unknownChannelReferenceHandler;
-    }
-
-    @Override
-    public UnknownChannelReferenceHandler resolveUnknownChannelReferenceHandler() {
-        UnknownChannelReferenceHandler handler = getUnknownChannelReferenceHandler();
-        if (handler != null) {
-            return handler;
-        }
-
-        FactoryManager mgr = getFactoryManager();
-        return (mgr == null) ? null : mgr.resolveUnknownChannelReferenceHandler();
+    public Map<KexProposalOption, String> getKexNegotiationResult() {
+        return unmodNegotiationResult;
     }
 
     @Override
@@ -450,38 +296,6 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
         return incoming ? inMac : outMac;
     }
 
-    @Override
-    public boolean isAuthenticated() {
-        return authed;
-    }
-
-    @Override
-    public void setAuthenticated() throws IOException {
-        this.authed = true;
-        signalSessionEvent(SessionListener.Event.Authenticated);
-    }
-
-    @Override
-    public ChannelStreamPacketWriterResolver getChannelStreamPacketWriterResolver() {
-        return channelStreamPacketWriterResolver;
-    }
-
-    @Override
-    public void setChannelStreamPacketWriterResolver(ChannelStreamPacketWriterResolver resolver) {
-        channelStreamPacketWriterResolver = resolver;
-    }
-
-    @Override
-    public ChannelStreamPacketWriterResolver resolveChannelStreamPacketWriterResolver() {
-        ChannelStreamPacketWriterResolver resolver = getChannelStreamPacketWriterResolver();
-        if (resolver != null) {
-            return resolver;
-        }
-
-        ChannelStreamPacketWriterResolverManager manager = getFactoryManager();
-        return manager.resolveChannelStreamPacketWriterResolver();
-    }
-
     /**
      * <P>Main input point for the MINA framework.</P>
      *
@@ -499,7 +313,7 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
             decoderBuffer.putBuffer(buffer);
             // One of those property will be set by the constructor and the other
             // one should be set by the readIdentification method
-            if (clientVersion == null || serverVersion == null) {
+            if ((clientVersion == null) || (serverVersion == null)) {
                 if (readIdentification(decoderBuffer)) {
                     decoderBuffer.compact();
                 } else {
@@ -544,7 +358,7 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
      */
     protected void handleMessage(Buffer buffer) throws Exception {
         try {
-            synchronized (lock) {
+            synchronized (sessionLock) {
                 doHandleMessage(buffer);
             }
         } catch (Throwable e) {
@@ -598,6 +412,12 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
             case SshConstants.SSH_MSG_NEWKEYS:
                 handleNewKeys(cmd, buffer);
                 break;
+            case KexExtensions.SSH_MSG_EXT_INFO:
+                handleKexExtension(cmd, buffer);
+                break;
+            case KexExtensions.SSH_MSG_NEWCOMPRESS:
+                handleNewCompression(cmd, buffer);
+                break;
             default:
                 if ((cmd >= SshConstants.SSH_MSG_KEX_FIRST) && (cmd <= SshConstants.SSH_MSG_KEX_LAST)) {
                     if (firstKexPacketFollows != null) {
@@ -615,7 +435,18 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
                     currentService.process(cmd, buffer);
                     resetIdleTimeout();
                 } else {
-                    throw new IllegalStateException("Unsupported command " + SshConstants.getCommandMessageName(cmd));
+                    /*
+                     * According to https://tools.ietf.org/html/rfc4253#section-11.4
+                     *
+                     *      An implementation MUST respond to all unrecognized messages
+                     *      with an SSH_MSG_UNIMPLEMENTED message in the order in which
+                     *      the messages were received.
+                     */
+                    if (log.isDebugEnabled()) {
+                        log.debug("process({}) Unsupported command: {}",
+                            this, SshConstants.getCommandMessageName(cmd));
+                    }
+                    notImplemented(cmd, buffer);
                 }
                 break;
         }
@@ -633,12 +464,13 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
          *      If the other party's guess was wrong, and this field was TRUE,
          *      the next packet MUST be silently ignored
          */
+        boolean debugEnabled = log.isDebugEnabled();
         for (KexProposalOption option : new KexProposalOption[]{KexProposalOption.ALGORITHMS, KexProposalOption.SERVERKEYS}) {
             Map.Entry<String, String> result = comparePreferredKexProposalOption(option);
             if (result != null) {
-                if (log.isDebugEnabled()) {
+                if (debugEnabled) {
                     log.debug("handleFirstKexPacketFollows({})[{}] 1st follow KEX packet {} option mismatch: client={}, server={}",
-                              this, SshConstants.getCommandMessageName(cmd), option, result.getKey(), result.getValue());
+                          this, SshConstants.getCommandMessageName(cmd), option, result.getKey(), result.getValue());
                 }
                 return false;
             }
@@ -647,119 +479,99 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
         return true;
     }
 
+    /**
+     * Compares the specified {@link KexProposalOption} option value for client vs. server
+     *
+     * @param option The option to check
+     * @return {@code null} if option is equal, otherwise a kex/value pair where key=client
+     * option value and value=the server-side one
+     */
     protected SimpleImmutableEntry<String, String> comparePreferredKexProposalOption(KexProposalOption option) {
         String[] clientPreferences = GenericUtils.split(clientProposal.get(option), ',');
-        String clientValue = clientPreferences[0];
+        String clientValue = GenericUtils.isEmpty(clientPreferences) ? null : clientPreferences[0];
         String[] serverPreferences = GenericUtils.split(serverProposal.get(option), ',');
-        String serverValue = serverPreferences[0];
-        return clientValue.equals(serverValue) ? null : new SimpleImmutableEntry<>(clientValue, serverValue);
+        String serverValue = GenericUtils.isEmpty(serverPreferences) ? null : serverPreferences[0];
+        if (GenericUtils.isEmpty(clientValue) || GenericUtils.isEmpty(serverValue)
+                || (!Objects.equals(clientValue, serverValue))) {
+            return new SimpleImmutableEntry<>(clientValue, serverValue);
+        }
+
+        return null;
+    }
+
+    /**
+     * Send a message to put new keys into use.
+     *
+     * @return An {@link IoWriteFuture} that can be used to wait and
+     * check the result of sending the packet
+     * @throws IOException if an error occurs sending the message
+     */
+    protected IoWriteFuture sendNewKeys() throws IOException {
+        if (log.isDebugEnabled()) {
+            log.debug("sendNewKeys({}) Send SSH_MSG_NEWKEYS", this);
+        }
+
+        Buffer buffer = createBuffer(SshConstants.SSH_MSG_NEWKEYS, Byte.SIZE);
+        IoWriteFuture future = writePacket(buffer);
+        /*
+         * According to https://tools.ietf.org/html/rfc8308#section-2.4:
+         *
+         *
+         *      If a client sends SSH_MSG_EXT_INFO, it MUST send it as the next packet
+         *      following the client's first SSH_MSG_NEWKEYS message to the server.
+         *
+         *      If a server sends SSH_MSG_EXT_INFO, it MAY send it at zero, one, or
+         *      both of the following opportunities:
+         *
+         *          + As the next packet following the server's first SSH_MSG_NEWKEYS.
+         */
+        KexExtensionHandler extHandler = getKexExtensionHandler();
+        if ((extHandler == null) || (!extHandler.isKexExtensionsAvailable(this, AvailabilityPhase.NEWKEYS))) {
+            return future;
+        }
+
+        extHandler.sendKexExtensions(this, KexPhase.NEWKEYS);
+        return future;
     }
 
     protected void handleKexMessage(int cmd, Buffer buffer) throws Exception {
         validateKexState(cmd, KexState.RUN);
 
+        boolean debugEnabled = log.isDebugEnabled();
         if (kex.next(cmd, buffer)) {
-            if (log.isDebugEnabled()) {
+            if (debugEnabled) {
                 log.debug("handleKexMessage({})[{}] KEX processing complete after cmd={}", this, kex.getName(), cmd);
             }
             checkKeys();
             sendNewKeys();
             kexState.set(KexState.KEYS);
         } else {
-            if (log.isDebugEnabled()) {
+            if (debugEnabled) {
                 log.debug("handleKexMessage({})[{}] more KEX packets expected after cmd={}", this, kex.getName(), cmd);
             }
         }
     }
 
-    @Override
-    public IoWriteFuture sendIgnoreMessage(byte... data) throws IOException {
-        data = (data == null) ? GenericUtils.EMPTY_BYTE_ARRAY : data;
-        Buffer buffer = createBuffer(SshConstants.SSH_MSG_IGNORE, data.length + Byte.SIZE);
-        buffer.putBytes(data);
-        return writePacket(buffer);
-    }
-
-    protected void handleIgnore(Buffer buffer) throws Exception {
-        // malformed ignore message - ignore (even though we don't have to, but we can be tolerant in this case)
-        if (!buffer.isValidMessageStructure(byte[].class)) {
-            if (log.isTraceEnabled()) {
-                log.trace("handleIgnore({}) ignore malformed message", this);
-            }
+    protected void handleKexExtension(int cmd, Buffer buffer) throws Exception {
+        KexExtensionHandler extHandler = getKexExtensionHandler();
+        int startPos = buffer.rpos();
+        if ((extHandler != null) && extHandler.handleKexExtensionsMessage(this, buffer)) {
             return;
         }
-        resetIdleTimeout();
 
-        ReservedSessionMessagesHandler handler = resolveReservedSessionMessagesHandler();
-        handler.handleIgnoreMessage(this, buffer);
+        buffer.rpos(startPos);  // restore original read position
+        notImplemented(cmd, buffer);
     }
 
-    protected void handleUnimplemented(Buffer buffer) throws Exception {
-        if (!buffer.isValidMessageStructure(int.class)) {
-            if (log.isTraceEnabled()) {
-                log.trace("handleUnimplemented({}) ignore malformed message", this);
-            }
+    protected void handleNewCompression(int cmd, Buffer buffer) throws Exception {
+        KexExtensionHandler extHandler = getKexExtensionHandler();
+        int startPos = buffer.rpos();
+        if ((extHandler != null) && extHandler.handleKexCompressionMessage(this, buffer)) {
             return;
         }
-        resetIdleTimeout();
 
-        ReservedSessionMessagesHandler handler = resolveReservedSessionMessagesHandler();
-        handler.handleUnimplementedMessage(this, buffer);
-    }
-
-    @Override
-    public IoWriteFuture sendDebugMessage(boolean display, Object msg, String lang) throws IOException {
-        String text = Objects.toString(msg, "");
-        lang = (lang == null) ? "" : lang;
-
-        Buffer buffer = createBuffer(SshConstants.SSH_MSG_DEBUG,
-                text.length() + lang.length() + Integer.SIZE /* a few extras */);
-        buffer.putBoolean(display);
-        buffer.putString(text);
-        buffer.putString(lang);
-        return writePacket(buffer);
-    }
-
-    protected void handleDebug(Buffer buffer) throws Exception {
-        // malformed ignore message - ignore (even though we don't have to, but we can be tolerant in this case)
-        if (!buffer.isValidMessageStructure(boolean.class, String.class, String.class)) {
-            if (log.isTraceEnabled()) {
-                log.trace("handleDebug({}) ignore malformed message", this);
-            }
-            return;
-        }
-        resetIdleTimeout();
-
-        ReservedSessionMessagesHandler handler = resolveReservedSessionMessagesHandler();
-        handler.handleDebugMessage(this, buffer);
-    }
-
-    protected ReservedSessionMessagesHandler resolveReservedSessionMessagesHandler() {
-        ReservedSessionMessagesHandler handler = getReservedSessionMessagesHandler();
-        return (handler == null) ? ReservedSessionMessagesHandlerAdapter.DEFAULT : handler;
-    }
-
-    protected void handleDisconnect(Buffer buffer) throws Exception  {
-        int code = buffer.getInt();
-        String message = buffer.getString();
-        String languageTag;
-        // SSHD-738: avoid spamming the log with uninteresting
-        // messages caused by buggy OpenSSH < 5.5
-        if (buffer.available() > 0) {
-            languageTag = buffer.getString();
-        } else {
-            languageTag = "";
-        }
-        handleDisconnect(code, message, languageTag, buffer);
-    }
-
-    protected void handleDisconnect(int code, String msg, String lang, Buffer buffer) throws Exception {
-        if (log.isDebugEnabled()) {
-            log.debug("handleDisconnect({}) SSH_MSG_DISCONNECT reason={}, [lang={}] msg={}",
-                      this, SshConstants.getDisconnectReasonName(code), lang, msg);
-        }
-
-        close(true);
+        buffer.rpos(startPos);  // restore original read position
+        notImplemented(cmd, buffer);
     }
 
     protected void handleServiceRequest(Buffer buffer) throws Exception {
@@ -768,16 +580,18 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
     }
 
     protected boolean handleServiceRequest(String serviceName, Buffer buffer) throws Exception {
-        if (log.isDebugEnabled()) {
+        boolean debugEnabled = log.isDebugEnabled();
+        if (debugEnabled) {
             log.debug("handleServiceRequest({}) SSH_MSG_SERVICE_REQUEST '{}'", this, serviceName);
         }
         validateKexState(SshConstants.SSH_MSG_SERVICE_REQUEST, KexState.DONE);
+
         try {
-            startService(serviceName);
+            startService(serviceName, buffer);
         } catch (Throwable e) {
-            if (log.isDebugEnabled()) {
+            if (debugEnabled) {
                 log.debug("handleServiceRequest({}) Service {} rejected: {} = {}",
-                          this, serviceName, e.getClass().getSimpleName(), e.getMessage());
+                      this, serviceName, e.getClass().getSimpleName(), e.getMessage());
             }
 
             if (log.isTraceEnabled()) {
@@ -787,7 +601,7 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
             return false;
         }
 
-        if (log.isDebugEnabled()) {
+        if (debugEnabled) {
             log.debug("handleServiceRequest({}) Accepted service {}", this, serviceName);
         }
 
@@ -813,6 +627,10 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
             log.debug("handleKexInit({}) SSH_MSG_KEXINIT", this);
         }
         receiveKexInit(buffer);
+        doKexNegotiation();
+    }
+
+    protected void doKexNegotiation() throws Exception {
         if (kexState.compareAndSet(KexState.DONE, KexState.RUN)) {
             sendKexInit();
         } else if (!kexState.compareAndSet(KexState.INIT, KexState.RUN)) {
@@ -821,16 +639,32 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
 
         Map<KexProposalOption, String> result = negotiate();
         String kexAlgorithm = result.get(KexProposalOption.ALGORITHMS);
-        kex = ValidateUtils.checkNotNull(NamedFactory.create(getKeyExchangeFactories(), kexAlgorithm),
+        Collection<? extends NamedFactory<KeyExchange>> kexFactories = getKeyExchangeFactories();
+        synchronized (pendingPackets) {
+            kex = ValidateUtils.checkNotNull(
+                NamedFactory.create(kexFactories, kexAlgorithm),
                 "Unknown negotiated KEX algorithm: %s",
                 kexAlgorithm);
-        kex.init(this, serverVersion.getBytes(StandardCharsets.UTF_8), clientVersion.getBytes(StandardCharsets.UTF_8), i_s, i_c);
+        }
+
+        byte[] v_s = serverVersion.getBytes(StandardCharsets.UTF_8);
+        byte[] v_c = clientVersion.getBytes(StandardCharsets.UTF_8);
+        byte[] i_s;
+        byte[] i_c;
+        synchronized (kexState) {
+            i_s = getServerKexData();
+            i_c = getClientKexData();
+        }
+        kex.init(this, v_s, v_c, i_s, i_c);
+
         signalSessionEvent(SessionListener.Event.KexCompleted);
     }
 
     protected void handleNewKeys(int cmd, Buffer buffer) throws Exception {
-        if (log.isDebugEnabled()) {
-            log.debug("handleNewKeys({}) SSH_MSG_NEWKEYS command={}", this, SshConstants.getCommandMessageName(cmd));
+        boolean debugEnabled = log.isDebugEnabled();
+        if (debugEnabled) {
+            log.debug("handleNewKeys({}) SSH_MSG_NEWKEYS command={}",
+                this, SshConstants.getCommandMessageName(cmd));
         }
         validateKexState(cmd, KexState.KEYS);
         receiveNewKeys();
@@ -846,15 +680,17 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
         }
 
         signalSessionEvent(SessionListener.Event.KeyEstablished);
+
         Collection<? extends Map.Entry<? extends SshFutureListener<IoWriteFuture>, IoWriteFuture>> pendingWrites;
         synchronized (pendingPackets) {
             pendingWrites = sendPendingPackets(pendingPackets);
+            kex = null; // discard and GC since KEX is completed
             kexState.set(KexState.DONE);
         }
 
         int pendingCount = pendingWrites.size();
         if (pendingCount > 0) {
-            if (log.isDebugEnabled()) {
+            if (debugEnabled) {
                 log.debug("handleNewKeys({}) sent {} pending packets", this, pendingCount);
             }
 
@@ -867,12 +703,14 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
             }
         }
 
-        synchronized (lock) {
-            lock.notifyAll();
+        synchronized (futureLock) {
+            futureLock.notifyAll();
         }
     }
 
-    protected List<SimpleImmutableEntry<PendingWriteFuture, IoWriteFuture>> sendPendingPackets(Queue<PendingWriteFuture> packetsQueue) throws IOException {
+    protected List<SimpleImmutableEntry<PendingWriteFuture, IoWriteFuture>> sendPendingPackets(
+            Queue<PendingWriteFuture> packetsQueue)
+                throws IOException {
         if (GenericUtils.isEmpty(packetsQueue)) {
             return Collections.emptyList();
         }
@@ -895,97 +733,18 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
         KexState actual = kexState.get();
         if (!expected.equals(actual)) {
             throw new IllegalStateException("Received KEX command=" + SshConstants.getCommandMessageName(cmd)
-                                          + " while in state=" + actual + " instead of " + expected);
+                  + " while in state=" + actual + " instead of " + expected);
         }
-    }
-
-    /**
-     * Handle any exceptions that occurred on this session.
-     * The session will be closed and a disconnect packet will be
-     * sent before if the given exception is an {@link SshException}.
-     *
-     * @param t the exception to process
-     */
-    @Override
-    public void exceptionCaught(Throwable t) {
-        State curState = state.get();
-        // Ignore exceptions that happen while closing immediately
-        if ((!State.Opened.equals(curState)) && (!State.Graceful.equals(curState))) {
-            if (log.isDebugEnabled()) {
-                log.debug("exceptionCaught({}) ignore {} due to state={}, message='{}'",
-                          this, t.getClass().getSimpleName(), curState, t.getMessage());
-            }
-            if (log.isTraceEnabled()) {
-                log.trace("exceptionCaught(" + this + ")[state=" + curState + "] ignored exception details", t);
-            }
-            return;
-        }
-
-        log.warn("exceptionCaught({})[state={}] {}: {}", this, curState, t.getClass().getSimpleName(), t.getMessage());
-        if (log.isDebugEnabled()) {
-            log.debug("exceptionCaught(" + this + ")[state=" + curState + "] details", t);
-        }
-
-        signalExceptionCaught(t);
-
-        if (State.Opened.equals(curState) && (t instanceof SshException)) {
-            int code = ((SshException) t).getDisconnectCode();
-            if (code > 0) {
-                try {
-                    disconnect(code, t.getMessage());
-                } catch (Throwable t2) {
-                    if (log.isDebugEnabled()) {
-                        log.debug("exceptionCaught({}) {} while disconnect with code={}: {}",
-                                  this, t2.getClass().getSimpleName(), SshConstants.getDisconnectReasonName(code), t2.getMessage());
-                    }
-                    if (log.isTraceEnabled()) {
-                        log.trace("exceptionCaught(" + this + ")[code=" + SshConstants.getDisconnectReasonName(code) + "] disconnect exception details", t2);
-                    }
-                }
-                return;
-            }
-        }
-
-        close(true);
-    }
-
-    protected void signalExceptionCaught(Throwable t) {
-        try {
-            invokeSessionSignaller(l -> {
-                signalExceptionCaught(l, t);
-                return null;
-            });
-        } catch (Throwable err) {
-            Throwable e = GenericUtils.peelException(err);
-            if (log.isDebugEnabled()) {
-                log.debug("exceptionCaught(" + this + ") signal session exception details", e);
-            }
-
-            if (log.isTraceEnabled()) {
-                Throwable[] suppressed = e.getSuppressed();
-                if (GenericUtils.length(suppressed) > 0) {
-                    for (Throwable s : suppressed) {
-                        log.trace("exceptionCaught(" + this + ") suppressed session exception signalling", s);
-                    }
-                }
-            }
-        }
-    }
-
-    protected void signalExceptionCaught(SessionListener listener, Throwable t) {
-        if (listener == null) {
-            return;
-        }
-
-        listener.sessionException(this, t);
     }
 
     @Override
     protected Closeable getInnerCloseable() {
-        return builder()
-                .parallel(toString(), getServices())
-                .close(ioSession)
-                .build();
+        Closeable closer = builder()
+            .parallel(toString(), getServices())
+            .close(getIoSession())
+            .build();
+        closer.addCloseFutureListener(future -> clearAttributes());
+        return closer;
     }
 
     @Override
@@ -1020,38 +779,6 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
         super.preClose();
     }
 
-    protected void signalSessionClosed() {
-        try {
-            invokeSessionSignaller(l -> {
-                signalSessionClosed(l);
-                return null;
-            });
-        } catch (Throwable err) {
-            Throwable e = GenericUtils.peelException(err);
-            log.warn("signalSessionClosed({}) {} while signal session closed: {}", this, e.getClass().getSimpleName(), e.getMessage());
-            if (log.isDebugEnabled()) {
-                log.debug("signalSessionClosed(" + this + ") signal session closed exception details", e);
-            }
-
-            if (log.isTraceEnabled()) {
-                Throwable[] suppressed = e.getSuppressed();
-                if (GenericUtils.length(suppressed) > 0) {
-                    for (Throwable s : suppressed) {
-                        log.trace("signalSessionClosed(" + this + ") suppressed session closed signalling", s);
-                    }
-                }
-            }
-        }
-    }
-
-    protected void signalSessionClosed(SessionListener listener) {
-        if (listener == null) {
-            return;
-        }
-
-        listener.sessionClosed(this);
-    }
-
     protected List<Service> getServices() {
         return (currentService != null)
               ? Collections.singletonList(currentService)
@@ -1076,14 +803,14 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
     public IoWriteFuture writePacket(Buffer buffer) throws IOException {
         // While exchanging key, queue high level packets
         if (!KexState.DONE.equals(kexState.get())) {
-            byte cmd = buffer.array()[buffer.rpos()];
+            byte[] bufData = buffer.array();
+            int cmd = bufData[buffer.rpos()] & 0xFF;
             if (cmd > SshConstants.SSH_MSG_KEX_LAST) {
-                String cmdName = SshConstants.getCommandMessageName(cmd & 0xFF);
+                String cmdName = SshConstants.getCommandMessageName(cmd);
                 synchronized (pendingPackets) {
                     if (!KexState.DONE.equals(kexState.get())) {
                         if (pendingPackets.isEmpty()) {
-                            log.debug("writePacket({})[{}] Start flagging packets as pending until key exchange is done",
-                                      this, cmdName);
+                            log.debug("writePacket({})[{}] Start flagging packets as pending until key exchange is done", this, cmdName);
                         }
                         PendingWriteFuture future = new PendingWriteFuture(cmdName, buffer);
                         pendingPackets.add(future);
@@ -1097,28 +824,21 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
             return doWritePacket(buffer);
         } finally {
             resetIdleTimeout();
-            checkRekey();
+            try {
+                checkRekey();
+            } catch (GeneralSecurityException e) {
+                if (log.isDebugEnabled()) {
+                    log.debug("writePacket(" + this + ") rekey security exception details", e);
+                }
+                throw ValidateUtils.initializeExceptionCause(
+                    new ProtocolException("Failed (" + e.getClass().getSimpleName() + ")"
+                        + " to check re-key necessity: " + e.getMessage()), e);
+            }
         }
     }
 
-    @SuppressWarnings("unchecked")
-    @Override
-    public IoWriteFuture writePacket(Buffer buffer, long timeout, TimeUnit unit) throws IOException {
-        IoWriteFuture writeFuture = writePacket(buffer);
-        DefaultSshFuture<IoWriteFuture> future = (DefaultSshFuture<IoWriteFuture>) writeFuture;
-        ScheduledExecutorService executor = factoryManager.getScheduledExecutorService();
-        ScheduledFuture<?> sched = executor.schedule(() -> {
-            Throwable t = new TimeoutException("Timeout writing packet: " + timeout + " " + unit);
-            if (log.isDebugEnabled()) {
-                log.debug("writePacket({}): {}", AbstractSession.this, t.getMessage());
-            }
-            future.setValue(t);
-        }, timeout, unit);
-        future.addListener(f -> sched.cancel(false));
-        return writeFuture;
-    }
-
-    protected IoWriteFuture doWritePacket(Buffer buffer) throws IOException {
+    // NOTE: must acquire encodeLock when calling this method
+    protected Buffer resolveOutputPacket(Buffer buffer) throws IOException {
         Buffer ignoreBuf = null;
         int ignoreDataLen = resolveIgnoreBufferDataLength();
         if (ignoreDataLen > 0) {
@@ -1132,7 +852,7 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
             ignoreBuf.wpos(wpos + ignoreDataLen);
 
             if (log.isDebugEnabled()) {
-                log.debug("doWritePacket({}) append SSH_MSG_IGNORE message", this);
+                log.debug("resolveOutputPacket({}) append SSH_MSG_IGNORE message", this);
             }
         }
 
@@ -1141,21 +861,25 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
         int cmd = data[curPos] & 0xFF;  // usually the 1st byte is the command
         buffer = validateTargetBuffer(cmd, buffer);
 
+        if (ignoreBuf != null) {
+            ignoreBuf = encode(ignoreBuf);
+
+            IoSession networkSession = getIoSession();
+            networkSession.writePacket(ignoreBuf);
+        }
+
+        return encode(buffer);
+    }
+
+    protected IoWriteFuture doWritePacket(Buffer buffer) throws IOException {
         // Synchronize all write requests as needed by the encoding algorithm
         // and also queue the write request in this synchronized block to ensure
         // packets are sent in the correct order
-        IoWriteFuture future;
         synchronized (encodeLock) {
-            if (ignoreBuf != null) {
-                ignoreBuf = encode(ignoreBuf);
-                ioSession.writePacket(ignoreBuf);
-            }
-
-            buffer = encode(buffer);
-            future = ioSession.writePacket(buffer);
+            Buffer packet = resolveOutputPacket(buffer);
+            IoSession networkSession = getIoSession();
+            return networkSession.writePacket(packet);
         }
-
-        return future;
     }
 
     protected int resolveIgnoreBufferDataLength() {
@@ -1169,27 +893,10 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
         }
 
         synchronized (random) {
-            ignorePacketsCount.set(calculateNextIgnorePacketCount(random, ignorePacketsFrequency, ignorePacketsVariance));
+            count = calculateNextIgnorePacketCount(random, ignorePacketsFrequency, ignorePacketsVariance);
+            ignorePacketsCount.set(count);
             return ignorePacketDataLength + random.random(ignorePacketDataLength);
         }
-    }
-
-    protected long calculateNextIgnorePacketCount(Random r, long freq, int variance) {
-        if ((freq <= 0L) || (variance < 0)) {
-            return -1L;
-        }
-
-        if (variance == 0) {
-            return freq;
-        }
-
-        int extra = r.random((variance < 0) ? (0 - variance) : variance);
-        long count = (variance < 0) ? (freq - extra) : (freq + extra);
-        if (log.isTraceEnabled()) {
-            log.trace("calculateNextIgnorePacketCount({}) count={}", this, count);
-        }
-
-        return count;
     }
 
     @Override
@@ -1198,10 +905,12 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
 
         long maxWaitMillis = TimeUnit.MILLISECONDS.convert(timeout, unit);
         if (maxWaitMillis <= 0L) {
-            throw new IllegalArgumentException("Requested timeout for " + request + " below 1 msec: " + timeout + " " + unit);
+            throw new IllegalArgumentException(
+                "Requested timeout for " + request + " below 1 msec: " + timeout + " " + unit);
         }
 
-        if (log.isDebugEnabled()) {
+        boolean debugEnabled = log.isDebugEnabled();
+        if (debugEnabled) {
             log.debug("request({}) request={}, timeout={} {}", this, request, timeout, unit);
         }
 
@@ -1232,7 +941,8 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
                     result = requestResult.getAndSet(null);
                 }
             } catch (InterruptedException e) {
-                throw (InterruptedIOException) new InterruptedIOException("Interrupted while waiting for request=" + request + " result").initCause(e);
+                throw (InterruptedIOException) new InterruptedIOException(
+                    "Interrupted while waiting for request=" + request + " result").initCause(e);
             }
         }
 
@@ -1240,9 +950,9 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
             throw new IOException("Session is closed or closing while awaiting reply for request=" + request);
         }
 
-        if (log.isDebugEnabled()) {
+        if (debugEnabled) {
             log.debug("request({}) request={}, timeout={} {}, result received={}",
-                      this, request, timeout, unit, result != null);
+                  this, request, timeout, unit, result != null);
         }
 
         if (result == null) {
@@ -1254,11 +964,6 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
         }
 
         return null;
-    }
-
-    @Override
-    public Buffer createBuffer(byte cmd) {
-        return createBuffer(cmd, 0);
     }
 
     @Override
@@ -1329,7 +1034,7 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
                 byte[] data = buffer.array();
                 int cmd = data[curPos] & 0xFF;  // usually the 1st byte is an SSH opcode
                 log.warn("encode({}) command={} performance cost: available buffer packet header length ({}) below min. required ({})",
-                         this, SshConstants.getCommandMessageName(cmd), curPos, SshConstants.SSH_PACKET_HEADER_LEN);
+                     this, SshConstants.getCommandMessageName(cmd), curPos, SshConstants.SSH_PACKET_HEADER_LEN);
                 Buffer nb = new ByteArrayBuffer(buffer.available() + Long.SIZE, false);
                 nb.wpos(SshConstants.SSH_PACKET_HEADER_LEN);
                 nb.putBuffer(buffer);
@@ -1342,11 +1047,13 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
             int off = curPos - SshConstants.SSH_PACKET_HEADER_LEN;
             // Debug log the packet
             if (log.isTraceEnabled()) {
-                buffer.dumpHex(LogManager.getLogger(), "encode(" + this + ") packet #" + seqo, this);
+                buffer.dumpHex(getSimplifiedLogger(), "encode(" + this + ") packet #" + seqo, this);
             }
 
             // Compress the packet if needed
-            if ((outCompression != null) && outCompression.isCompressionExecuted() && (authed || (!outCompression.isDelayed()))) {
+            if ((outCompression != null)
+                    && outCompression.isCompressionExecuted()
+                    && (isAuthenticated() || (!outCompression.isDelayed()))) {
                 outCompression.compress(buffer);
                 len = buffer.available();
             }
@@ -1383,7 +1090,7 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
             if (outCipher != null) {
                 outCipher.update(buffer.array(), off, len + 4);
 
-                int blocksCount = (len + 4) / outCipher.getBlockSize();
+                int blocksCount = (len + 4) / outCipher.getCipherBlockSize();
                 outBlocksCount.addAndGet(Math.max(1, blocksCount));
             }
             // Increment packet id
@@ -1419,15 +1126,19 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
                     if (inCipher != null) {
                         inCipher.update(decoderBuffer.array(), 0, inCipherSize);
 
-                        int blocksCount = inCipherSize / inCipher.getBlockSize();
+                        int blocksCount = inCipherSize / inCipher.getCipherBlockSize();
                         inBlocksCount.addAndGet(Math.max(1, blocksCount));
                     }
                     // Read packet length
                     decoderLength = decoderBuffer.getInt();
-                    // Check packet length validity
-                    if ((decoderLength < SshConstants.SSH_PACKET_HEADER_LEN) || (decoderLength > (256 * 1024))) {
+                    /*
+                     * Check packet length validity - we allow 8 times the minimum required packet length support
+                     * in order to be aligned with some OpenSSH versions that allow up to 256k
+                     */
+                    if ((decoderLength < SshConstants.SSH_PACKET_HEADER_LEN)
+                            || (decoderLength > (8 * SshConstants.SSH_REQUIRED_PAYLOAD_PACKET_LENGTH_SUPPORT))) {
                         log.warn("decode({}) Error decoding packet(invalid length): {}", this, decoderLength);
-                        decoderBuffer.dumpHex(LogManager.getLogger(), "decode(" + this + ") invalid length packet", this);
+                        decoderBuffer.dumpHex(getSimplifiedLogger(), "decode(" + this + ") invalid length packet", this);
                         throw new SshException(SshConstants.SSH2_DISCONNECT_PROTOCOL_ERROR,
                                 "Invalid packet length: " + decoderLength);
                     }
@@ -1450,7 +1161,7 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
                         int updateLen = decoderLength + 4 - inCipherSize;
                         inCipher.update(data, inCipherSize, updateLen);
 
-                        int blocksCount = updateLen / inCipher.getBlockSize();
+                        int blocksCount = updateLen / inCipher.getCipherBlockSize();
                         inBlocksCount.addAndGet(Math.max(1, blocksCount));
                     }
                     // Check the mac of the packet
@@ -1473,7 +1184,9 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
                     Buffer packet;
                     int wpos = decoderBuffer.wpos();
                     // Decompress if needed
-                    if ((inCompression != null) && inCompression.isCompressionExecuted() && (authed || (!inCompression.isDelayed()))) {
+                    if ((inCompression != null)
+                            && inCompression.isCompressionExecuted()
+                            && (isAuthenticated() || (!inCompression.isDelayed()))) {
                         if (uncompressBuffer == null) {
                             uncompressBuffer = new SessionWorkBuffer(this);
                         } else {
@@ -1489,7 +1202,7 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
                     }
 
                     if (log.isTraceEnabled()) {
-                        packet.dumpHex(LogManager.getLogger(), "decode(" + this + ") packet #" + seqi, this);
+                        packet.dumpHex(getSimplifiedLogger(), "decode(" + this + ") packet #" + seqi, this);
                     }
 
                     // Update stats
@@ -1511,39 +1224,6 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
     }
 
     /**
-     * Resolves the identification to send to the peer session by consulting
-     * the associated {@link FactoryManager}. If a value is set, then it is
-     * <U>appended</U> to the standard {@link #DEFAULT_SSH_VERSION_PREFIX}.
-     * Otherwise a default value is returned consisting of the prefix and
-     * the core artifact name + version in <U>uppercase</U> - e.g.,'
-     * &quot;SSH-2.0-SSHD-CORE-1.2.3.4&quot;
-     *
-     * @param configPropName The property used to query the factory manager
-     * @return The resolved identification value
-     */
-    protected String resolveIdentificationString(String configPropName) {
-        FactoryManager manager = getFactoryManager();
-        String ident = manager.getString(configPropName);
-        return DEFAULT_SSH_VERSION_PREFIX + (GenericUtils.isEmpty(ident) ? manager.getVersion() : ident);
-    }
-
-    /**
-     * Send our identification.
-     *
-     * @param ident our identification to send
-     * @return {@link IoWriteFuture} that can be used to wait for notification
-     * that identification has been send
-     * @throws IOException If failed to send the packet
-     */
-    protected IoWriteFuture sendIdentification(String ident) throws IOException {
-        byte[] data = (ident + "\r\n").getBytes(StandardCharsets.UTF_8);
-        if (log.isDebugEnabled()) {
-            log.debug("sendIdentification({}): {}", this, ident.replace('\r', '|').replace('\n', '|'));
-        }
-        return ioSession.writePacket(new ByteArrayBuffer(data));
-    }
-
-    /**
      * Read the other side identification.
      * This method is specific to the client or server side, but both should call
      * {@link #doReadIdentification(Buffer, boolean)} and
@@ -1552,125 +1232,10 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
      * @param buffer The {@link Buffer} containing the remote identification
      * @return <code>true</code> if the identification has been fully read or
      * <code>false</code> if more data is needed
-     * @throws IOException if an error occurs such as a bad protocol version
+     * @throws Exception if an error occurs such as a bad protocol version or unsuccessful
+     * KEX was involved
      */
-    protected abstract boolean readIdentification(Buffer buffer) throws IOException;
-
-    /**
-     * Read the remote identification from this buffer.
-     * If more data is needed, the buffer will be reset to its original state
-     * and a {@code null} value will be returned.  Else the identification
-     * string will be returned and the data read will be consumed from the buffer.
-     *
-     * @param buffer the buffer containing the identification string
-     * @param server {@code true} if it is called by the server session,
-     * {@code false} if by the client session
-     * @return A {@link List} of all received remote identification lines until
-     * the version line was read or {@code null} if more data is needed.
-     * The identification line is the <U>last</U> one in the list
-     */
-    protected List<String> doReadIdentification(Buffer buffer, boolean server) {
-        int maxIdentSize = PropertyResolverUtils.getIntProperty(this,
-                FactoryManager.MAX_IDENTIFICATION_SIZE, FactoryManager.DEFAULT_MAX_IDENTIFICATION_SIZE);
-        List<String> ident = null;
-        int rpos = buffer.rpos();
-        for (byte[] data = new byte[MAX_VERSION_LINE_LENGTH];;) {
-            int pos = 0;    // start accumulating line from scratch
-            for (boolean needLf = false;;) {
-                if (buffer.available() == 0) {
-                    // Need more data, so undo reading and return null
-                    buffer.rpos(rpos);
-                    return null;
-                }
-
-                byte b = buffer.getByte();
-                /*
-                 * According to RFC 4253 section 4.2:
-                 *
-                 *      "The null character MUST NOT be sent"
-                 */
-                if (b == 0) {
-                    throw new IllegalStateException("Incorrect identification (null characters not allowed) - "
-                            + " at line " + (GenericUtils.size(ident) + 1) + " character #" + (pos + 1)
-                            + " after '" + new String(data, 0, pos, StandardCharsets.UTF_8) + "'");
-                }
-                if (b == '\r') {
-                    needLf = true;
-                    continue;
-                }
-
-                if (b == '\n') {
-                    break;
-                }
-
-                if (needLf) {
-                    throw new IllegalStateException("Incorrect identification (bad line ending) "
-                            + " at line " + (GenericUtils.size(ident) + 1)
-                            + ": " + new String(data, 0, pos, StandardCharsets.UTF_8));
-                }
-
-                if (pos >= data.length) {
-                    throw new IllegalStateException("Incorrect identification (line too long): "
-                            + " at line " + (GenericUtils.size(ident) + 1)
-                            + ": " + new String(data, 0, pos, StandardCharsets.UTF_8));
-                }
-
-                data[pos++] = b;
-            }
-
-            String str = new String(data, 0, pos, StandardCharsets.UTF_8);
-            if (log.isDebugEnabled()) {
-                log.debug("doReadIdentification({}) line='{}'", this, str);
-            }
-
-            if (ident == null) {
-                ident = new ArrayList<>();
-            }
-            ident.add(str);
-
-            // if this is a server then only one line is expected from the client
-            if (server || str.startsWith("SSH-")) {
-                return ident;
-            }
-
-            if (buffer.rpos() > maxIdentSize) {
-                throw new IllegalStateException("Incorrect identification (too many header lines): size > " + maxIdentSize);
-            }
-        }
-    }
-
-    /**
-     * Create our proposal for SSH negotiation
-     *
-     * @param hostKeyTypes The comma-separated list of supported host key types
-     * @return The proposal {@link Map}
-     */
-    protected Map<KexProposalOption, String> createProposal(String hostKeyTypes) {
-        Map<KexProposalOption, String> proposal = new EnumMap<>(KexProposalOption.class);
-        proposal.put(KexProposalOption.ALGORITHMS,
-                NamedResource.getNames(
-                        ValidateUtils.checkNotNullAndNotEmpty(getKeyExchangeFactories(), "No KEX factories")));
-        proposal.put(KexProposalOption.SERVERKEYS, hostKeyTypes);
-
-        String ciphers = NamedResource.getNames(
-                ValidateUtils.checkNotNullAndNotEmpty(getCipherFactories(), "No cipher factories"));
-        proposal.put(KexProposalOption.S2CENC, ciphers);
-        proposal.put(KexProposalOption.C2SENC, ciphers);
-
-        String macs = NamedResource.getNames(
-                ValidateUtils.checkNotNullAndNotEmpty(getMacFactories(), "No MAC factories"));
-        proposal.put(KexProposalOption.S2CMAC, macs);
-        proposal.put(KexProposalOption.C2SMAC, macs);
-
-        String compressions = NamedResource.getNames(
-                ValidateUtils.checkNotNullAndNotEmpty(getCompressionFactories(), "No compression factories"));
-        proposal.put(KexProposalOption.S2CCOMP, compressions);
-        proposal.put(KexProposalOption.C2SCOMP, compressions);
-
-        proposal.put(KexProposalOption.S2CLANG, "");    // TODO allow configuration
-        proposal.put(KexProposalOption.C2SLANG, "");    // TODO allow configuration
-        return proposal;
-    }
+    protected abstract boolean readIdentification(Buffer buffer) throws Exception;
 
     /**
      * Send the key exchange initialization packet.
@@ -1691,14 +1256,16 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
         synchronized (random) {
             random.fill(buffer.array(), p, SshConstants.MSG_KEX_COOKIE_SIZE);
         }
-        if (log.isTraceEnabled()) {
+
+        boolean traceEnabled = log.isTraceEnabled();
+        if (traceEnabled) {
             log.trace("sendKexInit({}) cookie={}",
-                      this, BufferUtils.toHex(buffer.array(), p, SshConstants.MSG_KEX_COOKIE_SIZE, ':'));
+                  this, BufferUtils.toHex(buffer.array(), p, SshConstants.MSG_KEX_COOKIE_SIZE, ':'));
         }
 
         for (KexProposalOption paramType : KexProposalOption.VALUES) {
             String s = proposal.get(paramType);
-            if (log.isTraceEnabled()) {
+            if (traceEnabled) {
                 log.trace("sendKexInit({})[{}] {}", this, paramType.getDescription(), s);
             }
             buffer.putString(GenericUtils.trimToEmpty(s));
@@ -1718,8 +1285,9 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
      * @param buffer   the {@link Buffer} containing the key exchange init packet
      * @param proposal the remote proposal to fill
      * @return the packet data
+     * @throws IOException If failed to handle the message
      */
-    protected byte[] receiveKexInit(Buffer buffer, Map<KexProposalOption, String> proposal) {
+    protected byte[] receiveKexInit(Buffer buffer, Map<KexProposalOption, String> proposal) throws IOException {
         // Recreate the packet payload which will be needed at a later time
         byte[] d = buffer.array();
         byte[] data = new byte[buffer.available() + 1 /* the opcode */];
@@ -1731,16 +1299,18 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
         // Skip random cookie data
         buffer.rpos(cookieStartPos + SshConstants.MSG_KEX_COOKIE_SIZE);
         size += SshConstants.MSG_KEX_COOKIE_SIZE;
-        if (log.isTraceEnabled()) {
+
+        boolean traceEnabled = log.isTraceEnabled();
+        if (traceEnabled) {
             log.trace("receiveKexInit({}) cookie={}",
-                      this, BufferUtils.toHex(d, cookieStartPos, SshConstants.MSG_KEX_COOKIE_SIZE, ':'));
+                  this, BufferUtils.toHex(d, cookieStartPos, SshConstants.MSG_KEX_COOKIE_SIZE, ':'));
         }
 
         // Read proposal
         for (KexProposalOption paramType : KexProposalOption.VALUES) {
             int lastPos = buffer.rpos();
             String value = buffer.getString();
-            if (log.isTraceEnabled()) {
+            if (traceEnabled) {
                 log.trace("receiveKexInit({})[{}] {}", this, paramType.getDescription(), value);
             }
             int curPos = buffer.rpos();
@@ -1749,14 +1319,27 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
             size += readLen;
         }
 
+        KexExtensionHandler extHandler = getKexExtensionHandler();
+        if (extHandler != null) {
+            if (traceEnabled) {
+                log.trace("receiveKexInit({}) options before handler: {}", this, proposal);
+            }
+
+            extHandler.handleKexInitProposal(this, false, proposal);
+
+            if (traceEnabled) {
+                log.trace("receiveKexInit({}) options after handler: {}", this, proposal);
+            }
+        }
+
         firstKexPacketFollows = buffer.getBoolean();
-        if (log.isTraceEnabled()) {
+        if (traceEnabled) {
             log.trace("receiveKexInit({}) first kex packet follows: {}", this, firstKexPacketFollows);
         }
 
         long reserved = buffer.getUInt();
-        if (reserved != 0) {
-            if (log.isTraceEnabled()) {
+        if (reserved != 0L) {
+            if (traceEnabled) {
                 log.trace("receiveKexInit({}) non-zero reserved value: {}", this, reserved);
             }
         }
@@ -1768,35 +1351,22 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
     }
 
     /**
-     * Send a message to put new keys into use.
-     *
-     * @return An {@link IoWriteFuture} that can be used to wait and
-     * check the result of sending the packet
-     * @throws IOException if an error occurs sending the message
-     */
-    protected IoWriteFuture sendNewKeys() throws IOException {
-        if (log.isDebugEnabled()) {
-            log.debug("sendNewKeys({}) Send SSH_MSG_NEWKEYS", this);
-        }
-        Buffer buffer = createBuffer(SshConstants.SSH_MSG_NEWKEYS, Byte.SIZE);
-        return writePacket(buffer);
-    }
-
-    /**
      * Put new keys into use.
      * This method will initialize the ciphers, digests, macs and compression
      * according to the negotiated server and client proposals.
      *
      * @throws Exception if an error occurs
      */
+    @SuppressWarnings("checkstyle:VariableDeclarationUsageDistance")
     protected void receiveNewKeys() throws Exception {
         byte[] k = kex.getK();
         byte[] h = kex.getH();
         Digest hash = kex.getHash();
 
+        boolean debugEnabled = log.isDebugEnabled();
         if (sessionId == null) {
             sessionId = h.clone();
-            if (log.isDebugEnabled()) {
+            if (debugEnabled) {
                 log.debug("receiveNewKeys({}) session ID={}", this, BufferUtils.toHex(':', sessionId));
             }
         }
@@ -1834,10 +1404,11 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
         hash.update(buf, 0, pos);
         byte[] mac_s2c = hash.digest();
 
+        boolean serverSession = isServerSession();
         String value = getNegotiatedKexParameter(KexProposalOption.S2CENC);
         Cipher s2ccipher = ValidateUtils.checkNotNull(NamedFactory.create(getCipherFactories(), value), "Unknown s2c cipher: %s", value);
-        e_s2c = resizeKey(e_s2c, s2ccipher.getBlockSize(), hash, k, h);
-        s2ccipher.init(isServer ? Cipher.Mode.Encrypt : Cipher.Mode.Decrypt, e_s2c, iv_s2c);
+        e_s2c = resizeKey(e_s2c, s2ccipher.getKdfSize(), hash, k, h);
+        s2ccipher.init(serverSession ? Cipher.Mode.Encrypt : Cipher.Mode.Decrypt, e_s2c, iv_s2c);
 
         value = getNegotiatedKexParameter(KexProposalOption.S2CMAC);
         Mac s2cmac = NamedFactory.create(getMacFactories(), value);
@@ -1855,8 +1426,8 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
 
         value = getNegotiatedKexParameter(KexProposalOption.C2SENC);
         Cipher c2scipher = ValidateUtils.checkNotNull(NamedFactory.create(getCipherFactories(), value), "Unknown c2s cipher: %s", value);
-        e_c2s = resizeKey(e_c2s, c2scipher.getBlockSize(), hash, k, h);
-        c2scipher.init(isServer ? Cipher.Mode.Decrypt : Cipher.Mode.Encrypt, e_c2s, iv_c2s);
+        e_c2s = resizeKey(e_c2s, c2scipher.getKdfSize(), hash, k, h);
+        c2scipher.init(serverSession ? Cipher.Mode.Decrypt : Cipher.Mode.Encrypt, e_c2s, iv_c2s);
 
         value = getNegotiatedKexParameter(KexProposalOption.C2SMAC);
         Mac c2smac = NamedFactory.create(getMacFactories(), value);
@@ -1872,7 +1443,7 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
             throw new SshException(SshConstants.SSH2_DISCONNECT_COMPRESSION_ERROR, "Unknown c2s compression: " + value);
         }
 
-        if (isServer) {
+        if (serverSession) {
             outCipher = s2ccipher;
             outMac = s2cmac;
             outCompression = s2ccomp;
@@ -1897,15 +1468,15 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
         inCompression.init(Compression.Type.Inflater, -1);
 
         // see https://tools.ietf.org/html/rfc4344#section-3.2
-        int inBlockSize = inCipher.getBlockSize();
-        int outBlockSize = outCipher.getBlockSize();
+        int inBlockSize = inCipher.getCipherBlockSize();
+        int outBlockSize = outCipher.getCipherBlockSize();
         // select the lowest cipher size
         int avgCipherBlockSize = Math.min(inBlockSize, outBlockSize);
         long recommendedByteRekeyBlocks = 1L << Math.min((avgCipherBlockSize * Byte.SIZE) / 4, 63);    // in case (block-size / 4) > 63
         maxRekeyBlocks.set(this.getLongProperty(FactoryManager.REKEY_BLOCKS_LIMIT, recommendedByteRekeyBlocks));
-        if (log.isDebugEnabled()) {
+        if (debugEnabled) {
             log.debug("receiveNewKeys({}) inCipher={}, outCipher={}, recommended blocks limit={}, actual={}",
-                      this, inCipher, outCipher, recommendedByteRekeyBlocks, maxRekeyBlocks);
+                  this, inCipher, outCipher, recommendedByteRekeyBlocks, maxRekeyBlocks);
         }
 
         inBytesCount.set(0L);
@@ -1919,94 +1490,26 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
     }
 
     /**
-     * Method used while putting new keys into use that will resize the key used to
-     * initialize the cipher to the needed length.
-     *
-     * @param e         the key to resize
-     * @param blockSize the cipher block size (in bytes)
-     * @param hash      the hash algorithm
-     * @param k         the key exchange k parameter
-     * @param h         the key exchange h parameter
-     * @return the resized key
-     * @throws Exception if a problem occur while resizing the key
-     */
-    protected byte[] resizeKey(byte[] e, int blockSize, Digest hash, byte[] k, byte[] h) throws Exception {
-        for (Buffer buffer = null; blockSize > e.length; buffer = BufferUtils.clear(buffer)) {
-            if (buffer == null) {
-                buffer = new ByteArrayBuffer();
-            }
-
-            buffer.putMPInt(k);
-            buffer.putRawBytes(h);
-            buffer.putRawBytes(e);
-            hash.update(buffer.array(), 0, buffer.available());
-            byte[] foo = hash.digest();
-            byte[] bar = new byte[e.length + foo.length];
-            System.arraycopy(e, 0, bar, 0, e.length);
-            System.arraycopy(foo, 0, bar, e.length, foo.length);
-            e = bar;
-        }
-        return e;
-    }
-
-    @Override
-    public void disconnect(final int reason, final String msg) throws IOException {
-        log.info("Disconnecting({}): {} - {}", this, SshConstants.getDisconnectReasonName(reason), msg);
-        Buffer buffer = createBuffer(SshConstants.SSH_MSG_DISCONNECT, msg.length() + Short.SIZE);
-        buffer.putInt(reason);
-        buffer.putString(msg);
-        buffer.putString("");   // TODO configure language...
-
-        // Write the packet with a timeout to ensure a timely close of the session
-        // in case the consumer does not read packets anymore.
-        long disconnectTimeoutMs = this.getLongProperty(FactoryManager.DISCONNECT_TIMEOUT, FactoryManager.DEFAULT_DISCONNECT_TIMEOUT);
-        writePacket(buffer, disconnectTimeoutMs, TimeUnit.MILLISECONDS).addListener(future -> {
-            Throwable t = future.getException();
-            if (log.isDebugEnabled()) {
-                if (t == null) {
-                    log.debug("disconnect({}) operation successfully completed for reason={} [{}]",
-                              AbstractSession.this, SshConstants.getDisconnectReasonName(reason), msg);
-                } else {
-                    log.debug("disconnect({}) operation failed ({}) for reason={} [{}]: {}",
-                               AbstractSession.this, t.getClass().getSimpleName(),
-                               SshConstants.getDisconnectReasonName(reason), msg, t.getMessage());
-                }
-            }
-
-            if (t != null) {
-                if (log.isTraceEnabled()) {
-                    log.trace("disconnect(" + AbstractSession.this + ") reason=" + SshConstants.getDisconnectReasonName(reason) + " failure details", t);
-                }
-            }
-
-            close(true);
-        });
-    }
-
-    /**
-     * Send a {@code SSH_MSG_UNIMPLEMENTED} packet.  This packet should
+     * Send a {@code SSH_MSG_UNIMPLEMENTED} packet. This packet should
      * contain the sequence id of the unsupported packet: this number
      * is assumed to be the last packet received.
      *
-     * @return An {@link IoWriteFuture} that can be used to wait for packet write completion
-     * @throws IOException if an error occurred sending the packet
+     * @param cmd The un-implemented command value
+     * @param buffer The {@link Buffer} that contains the command. <b>Note:</b> the
+     * buffer's read position is just beyond the command.
+     * @return An {@link IoWriteFuture} that can be used to wait for packet write
+     * completion - {@code null} if the registered {@link ReservedSessionMessagesHandler}
+     * decided to handle the command internally
+     * @throws Exception if an error occurred while handling the packet.
      * @see #sendNotImplemented(long)
      */
-    protected IoWriteFuture notImplemented() throws IOException {
-        return sendNotImplemented(seqi - 1);
-    }
+    protected IoWriteFuture notImplemented(int cmd, Buffer buffer) throws Exception {
+        ReservedSessionMessagesHandler handler = resolveReservedSessionMessagesHandler();
+        if (handler.handleUnimplementedMessage(this, cmd, buffer)) {
+            return null;
+        }
 
-    /**
-     * Sends a {@code SSH_MSG_UNIMPLEMENTED} message
-     *
-     * @param seqNoValue The referenced sequence number
-     * @return An {@link IoWriteFuture} that can be used to wait for packet write completion
-     * @throws IOException if an error occurred sending the packet
-     */
-    protected IoWriteFuture sendNotImplemented(long seqNoValue) throws IOException {
-        Buffer buffer = createBuffer(SshConstants.SSH_MSG_UNIMPLEMENTED, Byte.SIZE);
-        buffer.putInt(seqNoValue);
-        return writePacket(buffer);
+        return sendNotImplemented(seqi - 1L);
     }
 
     /**
@@ -2015,20 +1518,32 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
      * the {@link #negotiationResult} property.
      *
      * @return The negotiated options {@link Map}
+     * @throws IOException If negotiation failed
      */
-    protected Map<KexProposalOption, String> negotiate() {
-        Map<KexProposalOption, String> c2sOptions = Collections.unmodifiableMap(clientProposal);
-        Map<KexProposalOption, String> s2cOptions = Collections.unmodifiableMap(serverProposal);
+    protected Map<KexProposalOption, String> negotiate() throws IOException {
+        Map<KexProposalOption, String> c2sOptions = getClientKexProposals();
+        Map<KexProposalOption, String> s2cOptions = getServerKexProposals();
         signalNegotiationStart(c2sOptions, s2cOptions);
 
         Map<KexProposalOption, String> guess = new EnumMap<>(KexProposalOption.class);
         Map<KexProposalOption, String> negotiatedGuess = Collections.unmodifiableMap(guess);
         try {
+            boolean debugEnabled = log.isDebugEnabled();
+            boolean traceEnabled = log.isTraceEnabled();
+            SessionDisconnectHandler discHandler = getSessionDisconnectHandler();
+            KexExtensionHandler extHandler = getKexExtensionHandler();
             for (KexProposalOption paramType : KexProposalOption.VALUES) {
                 String clientParamValue = c2sOptions.get(paramType);
                 String serverParamValue = s2cOptions.get(paramType);
                 String[] c = GenericUtils.split(clientParamValue, ',');
                 String[] s = GenericUtils.split(serverParamValue, ',');
+                /*
+                 * According to https://tools.ietf.org/html/rfc8308#section-2.2:
+                 *
+                 *      Implementations MAY disconnect if the counterpart sends an incorrect (KEX extension) indicator
+                 *
+                 * TODO - for now we do not enforce this
+                 */
                 for (String ci : c) {
                     for (String si : s) {
                         if (ci.equals(si)) {
@@ -2045,86 +1560,74 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
 
                 // check if reached an agreement
                 String value = guess.get(paramType);
-                if (value == null) {
-                    String message = "Unable to negotiate key exchange for " + paramType.getDescription()
-                            + " (client: " + clientParamValue + " / server: " + serverParamValue + ")";
-                    // OK if could not negotiate languages
-                    if (KexProposalOption.S2CLANG.equals(paramType) || KexProposalOption.C2SLANG.equals(paramType)) {
-                        if (log.isTraceEnabled()) {
-                            log.trace("negotiate({}) {}", this, message);
-                        }
-                    } else {
-                        throw new IllegalStateException(message);
+                if (extHandler != null) {
+                    extHandler.handleKexExtensionNegotiation(
+                        this, paramType, value, c2sOptions, clientParamValue, s2cOptions, serverParamValue);
+                }
+
+                if (value != null) {
+                    if (traceEnabled) {
+                        log.trace("negotiate({})[{}] guess={} (client={} / server={})",
+                            this, paramType.getDescription(), value, clientParamValue, serverParamValue);
                     }
-                } else {
-                    if (log.isTraceEnabled()) {
-                        log.trace("negotiate(" + this + ")[" + paramType.getDescription() + "] guess=" + value
-                                + " (client: " + clientParamValue + " / server: " + serverParamValue + ")");
+                    continue;
+                }
+
+                try {
+                    if ((discHandler != null)
+                            && discHandler.handleKexDisconnectReason(
+                                this, c2sOptions, s2cOptions, negotiatedGuess, paramType)) {
+                        if (debugEnabled) {
+                            log.debug("negotiate({}) ignore missing value for KEX option={}", this, paramType);
+                        }
+                        continue;
+                    }
+                } catch (IOException | RuntimeException e) {
+                    // If disconnect handler throws an exception continue with the disconnect
+                    log.warn("negotiate({}) failed ({}) to invoke disconnect handler due to mismatched KEX option={}: {}",
+                        this, e.getClass().getSimpleName(), paramType, e.getMessage());
+                    if (debugEnabled) {
+                        log.debug("negotiate(" + this + ") handler invocation exception details", e);
                     }
                 }
+
+                String message = "Unable to negotiate key exchange for " + paramType.getDescription()
+                    + " (client: " + clientParamValue + " / server: " + serverParamValue + ")";
+                // OK if could not negotiate languages
+                if (KexProposalOption.S2CLANG.equals(paramType) || KexProposalOption.C2SLANG.equals(paramType)) {
+                    if (traceEnabled) {
+                        log.trace("negotiate({}) {}", this, message);
+                    }
+                } else {
+                    throw new SshException(SshConstants.SSH2_DISCONNECT_KEY_EXCHANGE_FAILED, message);
+                }
             }
-        } catch (RuntimeException | Error e) {
+
+            /*
+             * According to https://tools.ietf.org/html/rfc8308#section-2.2:
+             *
+             *      If "ext-info-c" or "ext-info-s" ends up being negotiated as a
+             *      key exchange method, the parties MUST disconnect.
+             */
+            String kexOption = guess.get(KexProposalOption.ALGORITHMS);
+            if (KexExtensions.IS_KEX_EXTENSION_SIGNAL.test(kexOption)) {
+                if ((discHandler != null)
+                        && discHandler.handleKexDisconnectReason(
+                                this, c2sOptions, s2cOptions, negotiatedGuess, KexProposalOption.ALGORITHMS)) {
+                    if (debugEnabled) {
+                        log.debug("negotiate({}) ignore violating {} KEX option={}", this, KexProposalOption.ALGORITHMS, kexOption);
+                    }
+                } else {
+                    throw new SshException(SshConstants.SSH2_DISCONNECT_KEY_EXCHANGE_FAILED, "Illegal KEX option negotiated: " + kexOption);
+                }
+            }
+        } catch (IOException | RuntimeException | Error e) {
             signalNegotiationEnd(c2sOptions, s2cOptions, negotiatedGuess, e);
             throw e;
         }
 
         signalNegotiationEnd(c2sOptions, s2cOptions, negotiatedGuess, null);
         return setNegotiationResult(guess);
-    }
-
-    protected void signalNegotiationStart(Map<KexProposalOption, String> c2sOptions, Map<KexProposalOption, String> s2cOptions) {
-        try {
-            invokeSessionSignaller(l -> {
-                signalNegotiationStart(l, c2sOptions, s2cOptions);
-                return null;
-            });
-        } catch (Throwable err) {
-            if (err instanceof RuntimeException) {
-                throw (RuntimeException) err;
-            } else if (err instanceof Error) {
-                throw (Error) err;
-            } else {
-                throw new RuntimeException(err);
-            }
-        }
-    }
-
-    protected void signalNegotiationStart(
-            SessionListener listener, Map<KexProposalOption, String> c2sOptions, Map<KexProposalOption, String> s2cOptions) {
-        if (listener == null) {
-            return;
-        }
-
-        listener.sessionNegotiationStart(this, c2sOptions, s2cOptions);
-    }
-
-    protected void signalNegotiationEnd(
-            Map<KexProposalOption, String> c2sOptions, Map<KexProposalOption, String> s2cOptions,
-            Map<KexProposalOption, String> negotiatedGuess, Throwable reason) {
-        try {
-            invokeSessionSignaller(l -> {
-                signalNegotiationEnd(l, c2sOptions, s2cOptions, negotiatedGuess, reason);
-                return null;
-            });
-        } catch (Throwable err) {
-            if (err instanceof RuntimeException) {
-                throw (RuntimeException) err;
-            } else if (err instanceof Error) {
-                throw (Error) err;
-            } else {
-                throw new RuntimeException(err);
-            }
-        }
-    }
-
-    protected void signalNegotiationEnd(SessionListener listener,
-            Map<KexProposalOption, String> c2sOptions, Map<KexProposalOption, String> s2cOptions,
-            Map<KexProposalOption, String> negotiatedGuess, Throwable reason) {
-        if (listener == null) {
-            return;
-        }
-
-        listener.sessionNegotiationEnd(this, c2sOptions, s2cOptions, negotiatedGuess, null);
     }
 
     protected Map<KexProposalOption, String> setNegotiationResult(Map<KexProposalOption, String> guess) {
@@ -2137,13 +1640,13 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
 
         if (log.isDebugEnabled()) {
             log.debug("setNegotiationResult({}) Kex: server->client {} {} {}", this,
-                      guess.get(KexProposalOption.S2CENC),
-                      guess.get(KexProposalOption.S2CMAC),
-                      guess.get(KexProposalOption.S2CCOMP));
+                  guess.get(KexProposalOption.S2CENC),
+                  guess.get(KexProposalOption.S2CMAC),
+                  guess.get(KexProposalOption.S2CCOMP));
             log.debug("setNegotiationResult({}) Kex: client->server {} {} {}", this,
-                      guess.get(KexProposalOption.C2SENC),
-                      guess.get(KexProposalOption.C2SMAC),
-                      guess.get(KexProposalOption.C2SCOMP));
+                  guess.get(KexProposalOption.C2SENC),
+                  guess.get(KexProposalOption.C2SMAC),
+                  guess.get(KexProposalOption.C2SCOMP));
         }
 
         return guess;
@@ -2177,56 +1680,6 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
             resetIdleTimeout();
             requestResult.notifyAll();
         }
-    }
-
-    @Override
-    @SuppressWarnings("unchecked")
-    public <T> T getAttribute(AttributeKey<T> key) {
-        return (T) attributes.get(Objects.requireNonNull(key, "No key"));
-    }
-
-    @Override
-    @SuppressWarnings("unchecked")
-    public <T> T setAttribute(AttributeKey<T> key, T value) {
-        return (T) attributes.put(
-                Objects.requireNonNull(key, "No key"),
-                Objects.requireNonNull(value, "No value"));
-    }
-
-    @Override
-    @SuppressWarnings("unchecked")
-    public <T> T removeAttribute(AttributeKey<T> key) {
-        return (T) attributes.remove(Objects.requireNonNull(key, "No key"));
-    }
-
-    @Override
-    public <T> T resolveAttribute(AttributeKey<T> key) {
-        return AttributeStore.resolveAttribute(this, key);
-    }
-
-    @Override
-    public String getUsername() {
-        return username;
-    }
-
-    @Override
-    public void setUsername(String username) {
-        this.username = username;
-    }
-
-    public Object getLock() {
-        return lock;
-    }
-
-    @Override
-    public ReservedSessionMessagesHandler getReservedSessionMessagesHandler() {
-        return resolveEffectiveProvider(ReservedSessionMessagesHandler.class,
-                reservedSessionMessagesHandler, getFactoryManager().getReservedSessionMessagesHandler());
-    }
-
-    @Override
-    public void setReservedSessionMessagesHandler(ReservedSessionMessagesHandler handler) {
-        reservedSessionMessagesHandler = handler;
     }
 
     @Override
@@ -2358,72 +1811,21 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
         }
     }
 
-    /**
-     * Sends a session event to all currently registered session listeners
-     *
-     * @param event The event to send
-     * @throws IOException If any of the registered listeners threw an exception.
-     */
-    protected void signalSessionEvent(SessionListener.Event event) throws IOException {
-        try {
-            invokeSessionSignaller(l -> {
-                signalSessionEvent(l, event);
-                return null;
-            });
-        } catch (Throwable err) {
-            Throwable t = GenericUtils.peelException(err);
-            if (log.isDebugEnabled()) {
-                log.debug("sendSessionEvent({})[{}] failed ({}) to inform listeners: {}",
-                           this, event, t.getClass().getSimpleName(), t.getMessage());
-            }
-            if (log.isTraceEnabled()) {
-                log.trace("sendSessionEvent(" + this + ")[" + event + "] listener inform details", t);
-            }
-            if (t instanceof IOException) {
-                throw (IOException) t;
-            } else if (t instanceof RuntimeException) {
-                throw (RuntimeException) t;
-            } else {
-                throw new IOException("Failed (" + t.getClass().getSimpleName() + ") to send session event: " + t.getMessage(), t);
-            }
-        }
-    }
-
-    protected void signalSessionEvent(SessionListener listener, SessionListener.Event event) throws IOException {
-        if (listener == null) {
-            return;
-        }
-
-        listener.sessionEvent(this, event);
-    }
-
-    protected void invokeSessionSignaller(Invoker<SessionListener, Void> invoker) throws Throwable {
-        FactoryManager manager = getFactoryManager();
-        SessionListener[] listeners = {
-            (manager == null) ? null : manager.getSessionListenerProxy(),
-            getSessionListenerProxy()
-        };
-        Throwable err = null;
-        for (SessionListener l : listeners) {
-            if (l == null) {
-                continue;
-            }
-            try {
-                invoker.invoke(l);
-            } catch (Throwable t) {
-                err = GenericUtils.accumulateException(err, t);
-            }
-        }
-
-        if (err != null) {
-            throw err;
-        }
-    }
-
     @Override
     public KeyExchangeFuture reExchangeKeys() throws IOException {
-        requestNewKeysExchange();
-        return ValidateUtils.checkNotNull(kexFutureHolder.get(), "No current KEX future on state=%s", kexState.get());
+        try {
+            requestNewKeysExchange();
+        } catch (GeneralSecurityException e) {
+            if (log.isDebugEnabled()) {
+                log.debug("reExchangeKeys(" + this + ") security exception details", e);
+            }
+            throw ValidateUtils.initializeExceptionCause(
+                new ProtocolException("Failed (" + e.getClass().getSimpleName() + ")"
+                    + " to generate keys for exchange: " + e.getMessage()), e);
+        }
+
+        return ValidateUtils.checkNotNull(
+            kexFutureHolder.get(), "No current KEX future on state=%s", kexState.get());
     }
 
     /**
@@ -2431,11 +1833,12 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
      *
      * @return A {@link KeyExchangeFuture} to wait for the initiated exchange
      * or {@code null} if no need to re-key or an exchange is already in progress
-     * @throws IOException If failed to send the request
+     * @throws IOException If failed load the keys or send the request
+     * @throws GeneralSecurityException If failed to generate the necessary keys
      * @see #isRekeyRequired()
      * @see #requestNewKeysExchange()
      */
-    protected KeyExchangeFuture checkRekey() throws IOException {
+    protected KeyExchangeFuture checkRekey() throws IOException, GeneralSecurityException {
         return isRekeyRequired() ? requestNewKeysExchange() : null;
     }
 
@@ -2444,9 +1847,10 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
      *
      * @return A {@link KeyExchangeFuture} to wait for the initiated exchange
      * or {@code null} if an exchange is already in progress
-     * @throws IOException If failed to send the request
+     * @throws IOException If failed to load the keys or send the request
+     * @throws GeneralSecurityException If failed to generate the keys
      */
-    protected KeyExchangeFuture requestNewKeysExchange() throws IOException {
+    protected KeyExchangeFuture requestNewKeysExchange() throws IOException, GeneralSecurityException {
         if (!kexState.compareAndSet(KexState.DONE, KexState.INIT)) {
             if (log.isDebugEnabled()) {
                 log.debug("requestNewKeysExchange({}) KEX state not DONE: {}", this, kexState.get());
@@ -2499,8 +1903,7 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
         if (rekey) {
             if (log.isDebugEnabled()) {
                 log.debug("isRekeyTimeIntervalExceeded({}) re-keying: last={}, now={}, diff={}, max={}",
-                          this, new Date(lastKeyTimeValue.get()), new Date(now),
-                          rekeyDiff, maxRekeyInterval);
+                      this, new Date(lastKeyTimeValue.get()), new Date(now), rekeyDiff, maxRekeyInterval);
             }
         }
 
@@ -2516,7 +1919,7 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
         if (rekey) {
             if (log.isDebugEnabled()) {
                 log.debug("isRekeyPacketCountsExceeded({}) re-keying: in={}, out={}, max={}",
-                          this, inPacketsCount, outPacketsCount, maxRekyPackets);
+                      this, inPacketsCount, outPacketsCount, maxRekyPackets);
             }
         }
 
@@ -2532,7 +1935,7 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
         if (rekey) {
             if (log.isDebugEnabled()) {
                 log.debug("isRekeyDataSizeExceeded({}) re-keying: in={}, out={}, max={}",
-                          this, inBytesCount, outBytesCount, maxRekeyBytes);
+                      this, inBytesCount, outBytesCount, maxRekeyBytes);
             }
         }
 
@@ -2549,42 +1952,104 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
         if (rekey) {
             if (log.isDebugEnabled()) {
                 log.debug("isRekeyBlocksCountExceeded({}) re-keying: in={}, out={}, max={}",
-                          this, inBlocksCount, outBlocksCount, maxBlocks);
+                      this, inBlocksCount, outBlocksCount, maxBlocks);
             }
         }
 
         return rekey;
     }
 
-    protected byte[] sendKexInit() throws IOException {
+    @Override
+    protected String resolveSessionKexProposal(String hostKeyTypes) throws IOException {
+        String proposal = super.resolveSessionKexProposal(hostKeyTypes);
+        // see https://tools.ietf.org/html/rfc8308
+        KexExtensionHandler extHandler = getKexExtensionHandler();
+        if ((extHandler == null) || (!extHandler.isKexExtensionsAvailable(this, AvailabilityPhase.PROPOSAL))) {
+            return proposal;
+        }
+
+        String extType = isServerSession() ? KexExtensions.SERVER_KEX_EXTENSION : KexExtensions.CLIENT_KEX_EXTENSION;
+        if (GenericUtils.isEmpty(proposal)) {
+            return extType;
+        } else {
+            return proposal + "," + extType;
+        }
+    }
+
+    protected byte[] sendKexInit() throws IOException, GeneralSecurityException {
         String resolvedAlgorithms = resolveAvailableSignaturesProposal();
         if (GenericUtils.isEmpty(resolvedAlgorithms)) {
             throw new SshException(SshConstants.SSH2_DISCONNECT_HOST_KEY_NOT_VERIFIABLE,
-                    "sendKexInit() no resolved signatures available");
+                "sendKexInit() no resolved signatures available");
         }
 
         Map<KexProposalOption, String> proposal = createProposal(resolvedAlgorithms);
-        byte[] seed = sendKexInit(proposal);
-        if (log.isTraceEnabled()) {
+        KexExtensionHandler extHandler = getKexExtensionHandler();
+        boolean traceEnabled = log.isTraceEnabled();
+        if (extHandler != null) {
+            if (traceEnabled) {
+                log.trace("sendKexInit({}) options before handler: {}", this, proposal);
+            }
+
+            extHandler.handleKexInitProposal(this, true, proposal);
+
+            if (traceEnabled) {
+                log.trace("sendKexInit({}) options after handler: {}", this, proposal);
+            }
+        }
+
+        byte[] seed;
+        synchronized (kexState) {
+            seed = sendKexInit(proposal);
+            setKexSeed(seed);
+        }
+
+        if (traceEnabled) {
             log.trace("sendKexInit({}) proposal={} seed: {}", this, proposal, BufferUtils.toHex(':', seed));
         }
-        setKexSeed(seed);
         return seed;
     }
 
+    protected byte[] getClientKexData() {
+        synchronized (kexState) {
+            return (clientKexData == null) ? null : clientKexData.clone();
+        }
+    }
+
+    protected void setClientKexData(byte[] data) {
+        ValidateUtils.checkNotNullAndNotEmpty(data, "No client KEX seed");
+        synchronized (kexState) {
+            clientKexData = data.clone();
+        }
+    }
+
+    protected byte[] getServerKexData() {
+        synchronized (kexState) {
+            return (serverKexData == null) ? null : serverKexData.clone();
+        }
+    }
+
+    protected void setServerKexData(byte[] data) {
+        ValidateUtils.checkNotNullAndNotEmpty(data, "No server KEX seed");
+        synchronized (kexState) {
+            serverKexData = data.clone();
+        }
+    }
+
     /**
-     * @param seed The result of the KEXINIT handshake - required for correct
-     *             session key establishment
+     * @param seed The result of the KEXINIT handshake - required for correct session key establishment
      */
     protected abstract void setKexSeed(byte... seed);
 
     /**
      * @return A comma-separated list of all the signature protocols to be
      * included in the proposal - {@code null}/empty if no proposal
+     * @throws IOException If failed to read/parse the keys data
+     * @throws GeneralSecurityException If failed to generate the keys
      * @see #getFactoryManager()
      * @see #resolveAvailableSignaturesProposal(FactoryManager)
      */
-    protected String resolveAvailableSignaturesProposal() {
+    protected String resolveAvailableSignaturesProposal() throws IOException, GeneralSecurityException {
         return resolveAvailableSignaturesProposal(getFactoryManager());
     }
 
@@ -2592,8 +2057,11 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
      * @param manager The {@link FactoryManager}
      * @return A comma-separated list of all the signature protocols to be
      * included in the proposal - {@code null}/empty if no proposal
+     * @throws IOException If failed to read/parse the keys data
+     * @throws GeneralSecurityException If failed to generate the keys
      */
-    protected abstract String resolveAvailableSignaturesProposal(FactoryManager manager);
+    protected abstract String resolveAvailableSignaturesProposal(FactoryManager manager)
+            throws IOException, GeneralSecurityException;
 
     /**
      * Indicates the the key exchange is completed and the exchanged keys
@@ -2603,134 +2071,71 @@ public abstract class AbstractSession extends AbstractKexFactoryManager implemen
      */
     protected abstract void checkKeys() throws IOException;
 
-    protected void receiveKexInit(Buffer buffer) throws IOException {
+    protected byte[] receiveKexInit(Buffer buffer) throws Exception {
         Map<KexProposalOption, String> proposal = new EnumMap<>(KexProposalOption.class);
-        byte[] seed = receiveKexInit(buffer, proposal);
-        receiveKexInit(proposal, seed);
+
+        byte[] seed;
+        synchronized (kexState) {
+            seed = receiveKexInit(buffer, proposal);
+            receiveKexInit(proposal, seed);
+        }
+
+        if (log.isTraceEnabled()) {
+            log.trace("receiveKexInit({}) proposal={} seed: {}",
+                this, proposal, BufferUtils.toHex(':', seed));
+        }
+
+        return seed;
     }
 
     protected abstract void receiveKexInit(Map<KexProposalOption, String> proposal, byte[] seed) throws IOException;
 
-    // returns the proposal argument
-    protected Map<KexProposalOption, String> mergeProposals(Map<KexProposalOption, String> current, Map<KexProposalOption, String> proposal) {
-        if (current == proposal) {
-            return proposal; // nothing to merge
-        }
-
-        synchronized (current) {
-            if (!current.isEmpty()) {
-                current.clear();    // debug breakpoint
-            }
-
-            if (GenericUtils.isEmpty(proposal)) {
-                return proposal; // debug breakpoint
-            }
-
-            current.putAll(proposal);
-        }
-
-        return proposal;
+    /**
+     * Retrieve the SSH session from the I/O session. If the session has not been attached,
+     * an exception will be thrown
+     *
+     * @param ioSession The {@link IoSession}
+     * @return The SSH session attached to the I/O session
+     * @see #getSession(IoSession, boolean)
+     * @throws MissingAttachedSessionException if no attached SSH session
+     */
+    public static AbstractSession getSession(IoSession ioSession) throws MissingAttachedSessionException {
+        return getSession(ioSession, false);
     }
 
     /**
-     * Checks whether the session has timed out (both auth and idle timeouts are checked).
-     * If the session has timed out, a DISCONNECT message will be sent.
+     * Attach an SSH {@link AbstractSession} to the I/O session
      *
-     * @throws IOException If failed to check
-     * @see #checkAuthenticationTimeout(long, long)
-     * @see #checkIdleTimeout(long, long)
+     * @param ioSession The {@link IoSession}
+     * @param session The SSH session to attach
+     * @throws MultipleAttachedSessionException If a previous session already attached
      */
-    protected void checkForTimeouts() throws IOException {
-        if ((!isOpen()) || isClosing() || isClosed()) {
-            if (log.isDebugEnabled()) {
-                log.debug("checkForTimeouts({}) session closing", this);
-                return;
-            }
-        }
-
-        long now = System.currentTimeMillis();
-        Map.Entry<TimeoutStatus, String> result = checkAuthenticationTimeout(now, getAuthTimeout());
-        if (result == null) {
-            result = checkIdleTimeout(now, getIdleTimeout());
-        }
-
-        TimeoutStatus status = (result == null) ? TimeoutStatus.NoTimeout : result.getKey();
-        if ((status == null) || TimeoutStatus.NoTimeout.equals(status)) {
-            return;
-        }
-
-        if (log.isDebugEnabled()) {
-            log.debug("checkForTimeouts({}) disconnect - reason={}", this, status);
-        }
-
-        timeoutStatus.set(status);
-        disconnect(SshConstants.SSH2_DISCONNECT_PROTOCOL_ERROR, result.getValue());
-    }
-
-    /**
-     * Checks if authentication timeout expired
-     *
-     * @param now           The current time in millis
-     * @param authTimeoutMs The configured timeout in millis - if non-positive
-     *                      then no timeout
-     * @return A {@link SimpleImmutableEntry} specifying the timeout status and disconnect reason
-     * message if timeout expired, {@code null} or {@code NoTimeout} if no timeout
-     * occurred
-     * @see #getAuthTimeout()
-     */
-    protected SimpleImmutableEntry<TimeoutStatus, String> checkAuthenticationTimeout(long now, long authTimeoutMs) {
-        long authDiff = now - authTimeoutStart;
-        if ((!authed) && (authTimeoutMs > 0L) && (authDiff > authTimeoutMs)) {
-            return new SimpleImmutableEntry<>(TimeoutStatus.AuthTimeout, "Session has timed out waiting for authentication after " + authTimeoutMs + " ms.");
-        } else {
-            return null;
+    public static void attachSession(IoSession ioSession, AbstractSession session) throws MultipleAttachedSessionException {
+        Objects.requireNonNull(ioSession, "No I/O session");
+        Objects.requireNonNull(session, "No SSH session");
+        Object prev = ioSession.setAttributeIfAbsent(SESSION, session);
+        if (prev != null) {
+            throw new MultipleAttachedSessionException("Multiple attached session to " + ioSession + ": " + prev + " and " + session);
         }
     }
 
     /**
-     * Checks if idle timeout expired
+     * Retrieve the session SSH from the I/O session. If the session has not been attached
+     * and allowNull is <code>false</code>, an exception will be thrown, otherwise
+     * a {@code null} will be returned.
      *
-     * @param now           The current time in millis
-     * @param idleTimeoutMs The configured timeout in millis - if non-positive
-     *                      then no timeout
-     * @return A {@link SimpleImmutableEntry} specifying the timeout status and disconnect reason
-     * message if timeout expired, {@code null} or {@code NoTimeout} if no timeout
-     * occurred
-     * @see #getIdleTimeout()
+     * @param ioSession The {@link IoSession}
+     * @param allowNull If <code>true</code>, a {@code null} value may be returned if no
+     * session is attached
+     * @return the session attached to the I/O session or {@code null}
+     * @throws MissingAttachedSessionException if no attached session and allowNull=false
      */
-    protected SimpleImmutableEntry<TimeoutStatus, String> checkIdleTimeout(long now, long idleTimeoutMs) {
-        long idleDiff = now - idleTimeoutStart;
-        if ((idleTimeoutMs > 0L) && (idleDiff > idleTimeoutMs)) {
-            return new SimpleImmutableEntry<>(TimeoutStatus.IdleTimeout, "User session has timed out idling after " + idleTimeoutMs + " ms.");
-        } else {
-            return null;
+    public static AbstractSession getSession(IoSession ioSession, boolean allowNull) throws MissingAttachedSessionException {
+        AbstractSession session = (AbstractSession) ioSession.getAttribute(SESSION);
+        if ((session == null) && (!allowNull)) {
+            throw new MissingAttachedSessionException("No session attached to " + ioSession);
         }
-    }
 
-    @Override
-    public void resetIdleTimeout() {
-        this.idleTimeoutStart = System.currentTimeMillis();
-    }
-
-    @Override
-    public TimeoutStatus getTimeoutStatus() {
-        return timeoutStatus.get();
-    }
-
-    @Override
-    public long getAuthTimeout() {
-        return this.getLongProperty(FactoryManager.AUTH_TIMEOUT, FactoryManager.DEFAULT_AUTH_TIMEOUT);
-    }
-
-    @Override
-    public long getIdleTimeout() {
-        return this.getLongProperty(FactoryManager.IDLE_TIMEOUT, FactoryManager.DEFAULT_IDLE_TIMEOUT);
-    }
-
-    @Override
-    public String toString() {
-        IoSession ioSession = getIoSession();
-        SocketAddress peerAddress = (ioSession == null) ? null : ioSession.getRemoteAddress();
-        return getClass().getSimpleName() + "[" + getUsername() + "@" + peerAddress + "]";
+        return session;
     }
 }
