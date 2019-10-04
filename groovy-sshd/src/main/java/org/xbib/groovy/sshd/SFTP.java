@@ -73,6 +73,38 @@ public class SFTP {
         return performWithContext(ctx -> Files.exists(ctx.fileSystem.getPath(path)));
     }
 
+    public Boolean isExecutable(String path) throws Exception {
+        return performWithContext(ctx -> Files.isExecutable(ctx.fileSystem.getPath(path)));
+    }
+
+    public Boolean isDirectory(String path) throws Exception {
+        return performWithContext(ctx -> Files.isDirectory(ctx.fileSystem.getPath(path)));
+    }
+
+    public Boolean isRegularFile(String path) throws Exception {
+        return performWithContext(ctx -> Files.isRegularFile(ctx.fileSystem.getPath(path)));
+    }
+
+    public Boolean isHidden(String path) throws Exception {
+        return performWithContext(ctx -> Files.isHidden(ctx.fileSystem.getPath(path)));
+    }
+
+    public Boolean isSameFile(String path1, String path2) throws Exception {
+        return performWithContext(ctx -> Files.isSameFile(ctx.fileSystem.getPath(path1), ctx.fileSystem.getPath(path2)));
+    }
+
+    public Boolean isSymbolicLink(String path) throws Exception {
+        return performWithContext(ctx -> Files.isSymbolicLink(ctx.fileSystem.getPath(path)));
+    }
+
+    public Boolean isReadable(String path) throws Exception {
+        return performWithContext(ctx -> Files.isReadable(ctx.fileSystem.getPath(path)));
+    }
+
+    public Boolean isWritable(String path) throws Exception {
+        return performWithContext(ctx -> Files.isWritable(ctx.fileSystem.getPath(path)));
+    }
+
     public void each(String path, Closure<?> closure) throws Exception {
         WithContext<Object> action = ctx -> {
             try (DirectoryStream<Path> stream = Files.newDirectoryStream(ctx.fileSystem.getPath(path))) {
