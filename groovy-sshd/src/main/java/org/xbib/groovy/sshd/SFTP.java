@@ -18,6 +18,7 @@ import java.nio.file.OpenOption;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
+import java.nio.file.attribute.FileAttribute;
 import java.nio.file.attribute.PosixFileAttributeView;
 import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
@@ -103,6 +104,18 @@ public class SFTP {
 
     public Boolean isWritable(String path) throws Exception {
         return performWithContext(ctx -> Files.isWritable(ctx.fileSystem.getPath(path)));
+    }
+
+    public void createFile(String path, FileAttribute<?>... attributes) throws Exception {
+        performWithContext(ctx -> Files.createFile(ctx.fileSystem.getPath(path), attributes));
+    }
+
+    public void createDirectory(String path, FileAttribute<?>... attributes) throws Exception {
+        performWithContext(ctx -> Files.createDirectory(ctx.fileSystem.getPath(path), attributes));
+    }
+
+    public void createDirectories(String path, FileAttribute<?>... attributes) throws Exception {
+        performWithContext(ctx -> Files.createDirectories(ctx.fileSystem.getPath(path), attributes));
     }
 
     public void each(String path, Closure<?> closure) throws Exception {
