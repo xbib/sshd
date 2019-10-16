@@ -17,6 +17,7 @@ class SFTPTest {
     }
 
     @Test
+    @Ignore
     void testSFTP() {
         SFTP sftp = SFTP.newInstance("sftp://demo.wftpserver.com:2222",[username: 'demo-user', password: 'demo-user'.toCharArray()])
         log.info sftp.exists('/')
