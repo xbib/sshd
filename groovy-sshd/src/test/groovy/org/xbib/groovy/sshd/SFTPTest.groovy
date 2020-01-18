@@ -25,4 +25,5 @@ class SFTPTest {
             log.info "{} {} {}", path, Files.isDirectory(path), Files.getLastModifiedTime(path)
         }
     }
+
 }

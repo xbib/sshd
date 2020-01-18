@@ -12,7 +12,6 @@ import java.nio.channels.ReadableByteChannel;
 import java.nio.channels.WritableByteChannel;
 import java.nio.file.CopyOption;
 import java.nio.file.DirectoryStream;
-import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.OpenOption;
 import java.nio.file.Path;
@@ -28,12 +27,8 @@ import java.util.Collections;
 import java.util.EnumSet;
 import java.util.Map;
 import java.util.Set;
-import java.util.logging.Level;
-import java.util.logging.Logger;
 
 public class SFTP {
-
-    private static final Logger logger = Logger.getLogger(SFTP.class.getName());
 
     private static final int READ_BUFFER_SIZE = 128 * 1024;
 
@@ -129,29 +124,31 @@ public class SFTP {
     public void setLastModifiedTime(String path, FileTime fileTime) throws Exception {
         performWithContext(ctx -> Files.setLastModifiedTime(ctx.fileSystem.getPath(path), fileTime));
     }
-    
+
+    public FileTime getLastModified(String path) throws Exception{
+        return performWithContext(ctx -> Files.getLastModifiedTime(ctx.fileSystem.getPath(path)));
+    }
+
     public void setOwner(String path, UserPrincipal userPrincipal) throws Exception {
         performWithContext(ctx -> Files.setOwner(ctx.fileSystem.getPath(path), userPrincipal));
     }
-    
+
     public void each(String path, Closure<?> closure) throws Exception {
-        WithContext<Object> action = ctx -> {
+        performWithContext(ctx -> {
             try (DirectoryStream<Path> stream = Files.newDirectoryStream(ctx.fileSystem.getPath(path))) {
                 stream.forEach(closure::call);
             }
             return null;
-        };
-        performWithContext(action);
+        });
     }
 
     public void eachFilter(String path, DirectoryStream.Filter<Path> filter, Closure<?> closure) throws Exception {
-        WithContext<Object> action = ctx -> {
+        performWithContext(ctx -> {
             try (DirectoryStream<Path> stream = Files.newDirectoryStream(ctx.fileSystem.getPath(path), filter)) {
                 stream.forEach(closure::call);
             }
             return null;
-        };
-        performWithContext(action);
+        });
     }
 
     public void upload(Path source, Path target, CopyOption... copyOptions) throws Exception {
@@ -162,12 +159,11 @@ public class SFTP {
                        Set<PosixFilePermission> dirPermissions,
                        Set<PosixFilePermission> filePermissions,
                        CopyOption... copyOptions) throws Exception {
-        WithContext<Object> action = ctx -> {
+        performWithContext(ctx -> {
             upload(ctx, Files.newByteChannel(source), target, WRITE_BUFFER_SIZE,
                     dirPermissions, filePermissions, copyOptions);
             return null;
-        };
-        performWithContext(action);
+        });
     }
 
     public void upload(Path source, String target, CopyOption... copyOptions) throws Exception {
@@ -178,12 +174,11 @@ public class SFTP {
                        Set<PosixFilePermission> dirPermissions,
                        Set<PosixFilePermission> filePermissions,
                        CopyOption... copyOptions) throws Exception {
-        WithContext<Object> action = ctx -> {
+        performWithContext(ctx -> {
             upload(ctx, Files.newByteChannel(source), ctx.fileSystem.getPath(target), WRITE_BUFFER_SIZE,
                     dirPermissions, filePermissions, copyOptions);
             return null;
-        };
-        performWithContext(action);
+        });
     }
 
     public void upload(InputStream source, Path target, CopyOption... copyOptions) throws Exception {
@@ -194,12 +189,11 @@ public class SFTP {
                        Set<PosixFilePermission> dirPermissions,
                        Set<PosixFilePermission> filePermissions,
                        CopyOption... copyOptions) throws Exception {
-        WithContext<Object> action = ctx -> {
+        performWithContext(ctx -> {
             upload(ctx, Channels.newChannel(source), target, WRITE_BUFFER_SIZE,
                     dirPermissions, filePermissions, copyOptions);
             return null;
-        };
-        performWithContext(action);
+        });
     }
 
     public void upload(InputStream source, String target, CopyOption... copyOptions) throws Exception {
@@ -210,78 +204,51 @@ public class SFTP {
                        Set<PosixFilePermission> dirPermissions,
                        Set<PosixFilePermission> filePermissions,
                        CopyOption... copyOptions) throws Exception {
-        WithContext<Object> action = ctx -> {
+        performWithContext(ctx -> {
             upload(ctx, Channels.newChannel(source), ctx.fileSystem.getPath(target), WRITE_BUFFER_SIZE,
                     dirPermissions, filePermissions, copyOptions);
             return null;
-        };
-        performWithContext(action);
+        });
     }
 
-    public void download(Path source, Path target,
-                         CopyOption... copyOptions) throws Exception {
-        download(source, target, DEFAULT_DIR_PERMISSIONS, DEFAULT_FILE_PERMISSIONS, copyOptions);
-    }
-    
-    public void download(Path source, Path target,
-                         Set<PosixFilePermission> dirPermissions,
-                         Set<PosixFilePermission> filePermissions,
-                         CopyOption... copyOptions) throws Exception {
-        WithContext<Object> action = ctx -> {
-            download(ctx, source, target, READ_BUFFER_SIZE,
-                    dirPermissions, filePermissions, copyOptions);
+    public void download(Path source, Path target, CopyOption... copyOptions) throws Exception {
+        performWithContext(ctx -> {
+            download(ctx, source, target, READ_BUFFER_SIZE, copyOptions);
             return null;
-        };
-        performWithContext(action);
+        });
     }
 
-    public void download(String source, Path target,
-                         CopyOption... copyOptions) throws Exception {
-        download(source, target, DEFAULT_DIR_PERMISSIONS, DEFAULT_FILE_PERMISSIONS, copyOptions);
-    }
-
-    public void download(String source, Path target,
-                         Set<PosixFilePermission> dirPermissions,
-                         Set<PosixFilePermission> filePermissions,
-                         CopyOption... copyOptions) throws Exception {
-        WithContext<Object> action = ctx -> {
-            download(ctx, ctx.fileSystem.getPath(source), target, READ_BUFFER_SIZE,
-                    dirPermissions, filePermissions, copyOptions);
+    public void download(String source, Path target, CopyOption... copyOptions) throws Exception {
+        performWithContext(ctx -> {
+            download(ctx, ctx.fileSystem.getPath(source), target, READ_BUFFER_SIZE, copyOptions);
             return null;
-        };
-        performWithContext(action);
+        });
     }
 
     public void download(Path source, OutputStream target) throws Exception {
-        WithContext<Object> action = ctx -> {
+        performWithContext(ctx -> {
             download(ctx, source, target, READ_BUFFER_SIZE);
             return null;
-        };
-        performWithContext(action);
+        });
     }
 
     public void download(String source, OutputStream target) throws Exception {
-        WithContext<Object> action = ctx -> {
+        performWithContext(ctx -> {
             download(ctx, ctx.fileSystem.getPath(source), target, READ_BUFFER_SIZE);
             return null;
-        };
-        performWithContext(action);
+        });
+    }
+
+    public void copy(String source, String target, CopyOption... copyOptions) throws Exception {
+        performWithContext(ctx -> Files.copy(ctx.fileSystem.getPath(source), ctx.fileSystem.getPath(target), copyOptions));
     }
 
     public void rename(String source, String target, CopyOption... copyOptions) throws Exception {
-        WithContext<Object> action = ctx -> {
-            Files.move(ctx.fileSystem.getPath(source), ctx.fileSystem.getPath(target), copyOptions);
-            return null;
-        };
-        performWithContext(action);
+        performWithContext(ctx -> Files.move(ctx.fileSystem.getPath(source), ctx.fileSystem.getPath(target), copyOptions));
     }
 
     public void remove(String source) throws Exception {
-        WithContext<Object> action = ctx -> {
-            Files.deleteIfExists(ctx.fileSystem.getPath(source));
-            return null;
-        };
-        performWithContext(action);
+        performWithContext(ctx -> Files.deleteIfExists(ctx.fileSystem.getPath(source)));
     }
 
     private void upload(SFTPContext ctx,
@@ -314,31 +281,48 @@ public class SFTP {
                           Path source,
                           Path target,
                           int bufferSize,
-                          Set<PosixFilePermission> dirPerms,
-                          Set<PosixFilePermission> filePerms,
                           CopyOption... copyOptions) throws Exception {
-        prepareForWrite(target, dirPerms, filePerms);
+        prepareForRead(target);
         transfer(ctx.provider.newByteChannel(source, prepareReadOptions(copyOptions)),
                 Files.newByteChannel(target, prepareWriteOptions(copyOptions)), bufferSize);
+    }
+
+    private void prepareForRead(Path path) throws IOException {
+        if (path == null) {
+            return;
+        }
+        Path parent = path.getParent();
+        if (parent != null) {
+            if (!Files.exists(parent)) {
+                Files.createDirectories(parent);
+            }
+        }
+        if (!Files.exists(path)) {
+            Files.createFile(path);
+        }
     }
 
     private void prepareForWrite(Path path,
                                  Set<PosixFilePermission> dirPerms,
                                  Set<PosixFilePermission> filePerms) throws IOException {
-        try {
-            Path parent = path.getParent();
-            if (parent != null && !Files.exists(parent)) {
-                Files.createDirectories(parent, PosixFilePermissions.asFileAttribute(dirPerms));
-            }
-            if (!Files.exists(path)) {
-                Files.createFile(path, PosixFilePermissions.asFileAttribute(filePerms));
+        if (path == null) {
+            return;
+        }
+        Path parent = path.getParent();
+        if (parent != null) {
+            if (!Files.exists(parent)) {
+                Files.createDirectories(parent);
             }
             PosixFileAttributeView posixFileAttributeView =
-                    Files.getFileAttributeView(path, PosixFileAttributeView.class);
-            posixFileAttributeView.setPermissions(filePerms);
-        } catch (FileAlreadyExistsException e) {
-            logger.log(Level.SEVERE, "should not happen: file already exists: " + path);
+                    Files.getFileAttributeView(parent, PosixFileAttributeView.class);
+            posixFileAttributeView.setPermissions(dirPerms);
         }
+        if (!Files.exists(path)) {
+            Files.createFile(path);
+        }
+        PosixFileAttributeView posixFileAttributeView =
+                Files.getFileAttributeView(path, PosixFileAttributeView.class);
+        posixFileAttributeView.setPermissions(filePerms);
     }
 
     private Set<? extends OpenOption> prepareReadOptions(CopyOption... copyOptions) {
