@@ -117,8 +117,16 @@ public class SFTP {
         performWithContext(ctx -> Files.setAttribute(ctx.fileSystem.getPath(path), attribute, value));
     }
 
+    public Object getAttribute(String path, String attribute) throws Exception {
+        return performWithContext(ctx -> Files.getAttribute(ctx.fileSystem.getPath(path), attribute));
+    }
+
     public void setPermissions(String path, Set<PosixFilePermission> permissions) throws Exception {
         performWithContext(ctx -> Files.setPosixFilePermissions(ctx.fileSystem.getPath(path), permissions));
+    }
+
+    public Set<PosixFilePermission> getPermissions(String path) throws Exception {
+        return performWithContext(ctx -> Files.getPosixFilePermissions(ctx.fileSystem.getPath(path)));
     }
 
     public void setLastModifiedTime(String path, FileTime fileTime) throws Exception {
@@ -131,6 +139,10 @@ public class SFTP {
 
     public void setOwner(String path, UserPrincipal userPrincipal) throws Exception {
         performWithContext(ctx -> Files.setOwner(ctx.fileSystem.getPath(path), userPrincipal));
+    }
+
+    public  UserPrincipal getOwner(String path) throws Exception {
+        return performWithContext(ctx -> Files.getOwner(ctx.fileSystem.getPath(path)));
     }
 
     public void each(String path, Closure<?> closure) throws Exception {
