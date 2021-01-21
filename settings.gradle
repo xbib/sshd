@@ -1,5 +1,3 @@
-rootProject.name = name
-
 include 'sshd-eddsa'
 include 'sshd-common'
 include 'sshd-client'

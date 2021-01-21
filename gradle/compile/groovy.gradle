@@ -1,0 +1,34 @@
+apply plugin: 'groovy'
+
+dependencies {
+    implementation "org.codehaus.groovy:groovy:${project.property('groovy.version')}:indy"
+}
+
+compileGroovy {
+    sourceCompatibility = JavaVersion.VERSION_11
+    targetCompatibility = JavaVersion.VERSION_11
+}
+
+compileTestGroovy {
+    sourceCompatibility = JavaVersion.VERSION_11
+    targetCompatibility = JavaVersion.VERSION_11
+}
+
+tasks.withType(GroovyCompile) {
+    options.compilerArgs
+    if (!options.compilerArgs.contains("-processor")) {
+        options.compilerArgs << '-proc:none'
+    }
+    groovyOptions.optimizationOptions.indy = true
+}
+
+task groovydocJar(type: Jar, dependsOn: 'groovydoc') {
+    from groovydoc.destinationDir
+    archiveClassifier.set('javadoc')
+}
+
+configurations.all {
+    resolutionStrategy {
+        force "org.codehaus.groovy:groovy:${project.property('groovy.version')}:indy"
+    }
+}
