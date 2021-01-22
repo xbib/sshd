@@ -1,26 +1,42 @@
 package org.xbib.groovy.sshd;
 
-import org.xbib.io.sshd.fs.SftpFileSystemProvider;
+import org.apache.sshd.client.ClientBuilder;
+import org.apache.sshd.client.SshClient;
+import org.apache.sshd.fs.SftpFileSystem;
+import org.apache.sshd.fs.SftpFileSystemProvider;
 
 import java.io.IOException;
 import java.net.URI;
-import java.nio.file.FileSystem;
-import java.util.HashMap;
 import java.util.Map;
 
 /**
  */
 class SFTPContext {
 
-    final FileSystem fileSystem;
+    private final SshClient sshClient;
+
+    final SftpFileSystemProvider provider;
+
+    final SftpFileSystem fileSystem;
 
     SFTPContext(URI uri, Map<String, ?> env) throws IOException {
-        this.fileSystem = env != null ?
-                new SftpFileSystemProvider().newFileSystem(uri, env) :
-                new SftpFileSystemProvider().newFileSystem(uri, new HashMap<>());
+        this.sshClient = ClientBuilder.builder().build();
+        Object object = env.get("workers");
+        if (object instanceof Integer) {
+            sshClient.setNioWorkers((Integer) object);
+        } else if (object instanceof String) {
+            sshClient.setNioWorkers(Integer.parseInt((String) object));
+        } else {
+            // we do not require a vast pool of threads
+            sshClient.setNioWorkers(1);
+        }
+        sshClient.start();
+        this.provider = new SftpFileSystemProvider(sshClient);
+        this.fileSystem = provider.newFileSystem(uri, env);
     }
 
     void close() throws IOException {
+        sshClient.stop();
         fileSystem.close();
     }
 }

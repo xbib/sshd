@@ -1,8 +1,0 @@
-ext {
-    user = 'xbib'
-    projectName = 'archive'
-    projectDescription = 'Archive algorithms'
-    scmUrl = 'https://github.com/xbib/archive'
-    scmConnection = 'scm:git:git://github.com/xbib/archive.git'
-    scmDeveloperConnection = 'scm:git:git://github.com/xbib/archive.git'
-}

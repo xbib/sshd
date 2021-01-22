@@ -1,3 +1,5 @@
 dependencies {
-    testCompile "org.hamcrest:hamcrest-all:${project.property('hamcrest.version')}"
+    //testImplementation "org.hamcrest:hamcrest-all:${project.property('hamcrest.version')}"
+    testRuntimeOnly "org.junit.vintage:junit-vintage-engine:${project.property('junit.version')}"
+    testImplementation "junit:junit:${project.property('junit4.version')}"
 }

@@ -1,3 +1,4 @@
 dependencies {
-    compile project(':sshd-client')
+    api project(':sshd-client')
+    testImplementation "org.apache.logging.log4j:log4j-core:${project.property('log4j.version')}"
 }

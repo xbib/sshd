@@ -2,23 +2,43 @@ package org.xbib.groovy.sshd;
 
 import groovy.lang.Closure;
 
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.URI;
+import java.nio.ByteBuffer;
+import java.nio.channels.Channels;
+import java.nio.channels.ReadableByteChannel;
+import java.nio.channels.WritableByteChannel;
 import java.nio.file.CopyOption;
 import java.nio.file.DirectoryStream;
-import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
+import java.nio.file.OpenOption;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
+import java.nio.file.attribute.FileAttribute;
+import java.nio.file.attribute.FileTime;
+import java.nio.file.attribute.PosixFileAttributeView;
+import java.nio.file.attribute.PosixFilePermission;
+import java.nio.file.attribute.PosixFilePermissions;
+import java.nio.file.attribute.UserPrincipal;
+import java.util.Collections;
+import java.util.EnumSet;
 import java.util.Map;
-import java.util.logging.Level;
-import java.util.logging.Logger;
+import java.util.Set;
 
-/**
- */
 public class SFTP {
 
-    private static final Logger logger = Logger.getLogger(SFTP.class.getName());
+    private static final int READ_BUFFER_SIZE = 128 * 1024;
+
+    private static final int WRITE_BUFFER_SIZE = 128 * 1024;
+
+    private static final Set<PosixFilePermission> DEFAULT_DIR_PERMISSIONS =
+            PosixFilePermissions.fromString("rwxr-xr-x");
+
+    private static final Set<PosixFilePermission> DEFAULT_FILE_PERMISSIONS =
+            PosixFilePermissions.fromString("rw-r--r--");
 
     private final String url;
 
@@ -38,7 +58,7 @@ public class SFTP {
     }
 
     public static SFTP newInstance(String url) {
-        return newInstance(url, null);
+        return newInstance(url, Collections.emptyMap());
     }
 
     public static SFTP newInstance(String url, Map<String, ?> env) {
@@ -49,115 +69,305 @@ public class SFTP {
         return performWithContext(ctx -> Files.exists(ctx.fileSystem.getPath(path)));
     }
 
+    public Boolean isExecutable(String path) throws Exception {
+        return performWithContext(ctx -> Files.isExecutable(ctx.fileSystem.getPath(path)));
+    }
+
+    public Boolean isDirectory(String path) throws Exception {
+        return performWithContext(ctx -> Files.isDirectory(ctx.fileSystem.getPath(path)));
+    }
+
+    public Boolean isRegularFile(String path) throws Exception {
+        return performWithContext(ctx -> Files.isRegularFile(ctx.fileSystem.getPath(path)));
+    }
+
+    public Boolean isHidden(String path) throws Exception {
+        return performWithContext(ctx -> Files.isHidden(ctx.fileSystem.getPath(path)));
+    }
+
+    public Boolean isSameFile(String path1, String path2) throws Exception {
+        return performWithContext(ctx -> Files.isSameFile(ctx.fileSystem.getPath(path1), ctx.fileSystem.getPath(path2)));
+    }
+
+    public Boolean isSymbolicLink(String path) throws Exception {
+        return performWithContext(ctx -> Files.isSymbolicLink(ctx.fileSystem.getPath(path)));
+    }
+
+    public Boolean isReadable(String path) throws Exception {
+        return performWithContext(ctx -> Files.isReadable(ctx.fileSystem.getPath(path)));
+    }
+
+    public Boolean isWritable(String path) throws Exception {
+        return performWithContext(ctx -> Files.isWritable(ctx.fileSystem.getPath(path)));
+    }
+
+    public void createFile(String path, FileAttribute<?>... attributes) throws Exception {
+        performWithContext(ctx -> Files.createFile(ctx.fileSystem.getPath(path), attributes));
+    }
+
+    public void createDirectory(String path, FileAttribute<?>... attributes) throws Exception {
+        performWithContext(ctx -> Files.createDirectory(ctx.fileSystem.getPath(path), attributes));
+    }
+
+    public void createDirectories(String path, FileAttribute<?>... attributes) throws Exception {
+        performWithContext(ctx -> Files.createDirectories(ctx.fileSystem.getPath(path), attributes));
+    }
+
+    public void setAttribute(String path, String attribute, Object value) throws Exception {
+        performWithContext(ctx -> Files.setAttribute(ctx.fileSystem.getPath(path), attribute, value));
+    }
+
+    public Object getAttribute(String path, String attribute) throws Exception {
+        return performWithContext(ctx -> Files.getAttribute(ctx.fileSystem.getPath(path), attribute));
+    }
+
+    public void setPermissions(String path, Set<PosixFilePermission> permissions) throws Exception {
+        performWithContext(ctx -> Files.setPosixFilePermissions(ctx.fileSystem.getPath(path), permissions));
+    }
+
+    public Set<PosixFilePermission> getPermissions(String path) throws Exception {
+        return performWithContext(ctx -> Files.getPosixFilePermissions(ctx.fileSystem.getPath(path)));
+    }
+
+    public void setLastModifiedTime(String path, FileTime fileTime) throws Exception {
+        performWithContext(ctx -> Files.setLastModifiedTime(ctx.fileSystem.getPath(path), fileTime));
+    }
+
+    public FileTime getLastModified(String path) throws Exception{
+        return performWithContext(ctx -> Files.getLastModifiedTime(ctx.fileSystem.getPath(path)));
+    }
+
+    public void setOwner(String path, UserPrincipal userPrincipal) throws Exception {
+        performWithContext(ctx -> Files.setOwner(ctx.fileSystem.getPath(path), userPrincipal));
+    }
+
+    public  UserPrincipal getOwner(String path) throws Exception {
+        return performWithContext(ctx -> Files.getOwner(ctx.fileSystem.getPath(path)));
+    }
+
     public void each(String path, Closure<?> closure) throws Exception {
-        WithContext<Object> action = ctx -> {
+        performWithContext(ctx -> {
             try (DirectoryStream<Path> stream = Files.newDirectoryStream(ctx.fileSystem.getPath(path))) {
                 stream.forEach(closure::call);
             }
             return null;
-        };
-        performWithContext(action);
+        });
     }
 
     public void eachFilter(String path, DirectoryStream.Filter<Path> filter, Closure<?> closure) throws Exception {
-        WithContext<Object> action = ctx -> {
+        performWithContext(ctx -> {
             try (DirectoryStream<Path> stream = Files.newDirectoryStream(ctx.fileSystem.getPath(path), filter)) {
                 stream.forEach(closure::call);
             }
             return null;
-        };
-        performWithContext(action);
+        });
     }
 
     public void upload(Path source, Path target, CopyOption... copyOptions) throws Exception {
-        WithContext<Object> action = ctx -> {
-            try {
-                Path parent = target.getParent();
-                if (!Files.exists(parent)) {
-                    Files.createDirectories(parent);
-                }
-            } catch (FileAlreadyExistsException e) {
-                logger.log(Level.SEVERE, "parent already exists as file: " + target);
-
-            }
-            Files.copy(source, target, copyOptions);
-            return null;
-        };
-        performWithContext(action);
+        upload(source, target, DEFAULT_DIR_PERMISSIONS, DEFAULT_FILE_PERMISSIONS, copyOptions);
     }
 
-    public void upload(Path source, String targetName, CopyOption... copyOptions) throws Exception {
-        WithContext<Object> action = ctx -> {
-            Path target = ctx.fileSystem.getPath(targetName);
-            try {
-                Path parent = target.getParent();
-                if (!Files.exists(parent)) {
-                    Files.createDirectories(parent);
-                }
-            } catch (FileAlreadyExistsException e) {
-                logger.log(Level.SEVERE, "parent already exists as file: " + target);
-            }
-            Files.copy(source, target, copyOptions);
+    public void upload(Path source, Path target,
+                       Set<PosixFilePermission> dirPermissions,
+                       Set<PosixFilePermission> filePermissions,
+                       CopyOption... copyOptions) throws Exception {
+        performWithContext(ctx -> {
+            upload(ctx, Files.newByteChannel(source), target, WRITE_BUFFER_SIZE,
+                    dirPermissions, filePermissions, copyOptions);
             return null;
-        };
-        performWithContext(action);
+        });
     }
 
-    public void upload(InputStream source, String targetName, CopyOption... copyOptions) throws Exception {
-        WithContext<Object> action = ctx -> {
-            Path target = ctx.fileSystem.getPath(targetName);
-            try {
-                Path parent = target.getParent();
-                if (!Files.exists(parent)) {
-                    Files.createDirectories(parent);
-                }
-            } catch (FileAlreadyExistsException e) {
-                logger.log(Level.SEVERE, "parent already exists as file: " + target);
-            }
-            Files.copy(source, target, copyOptions);
+    public void upload(Path source, String target, CopyOption... copyOptions) throws Exception {
+        upload(source, target, DEFAULT_DIR_PERMISSIONS, DEFAULT_FILE_PERMISSIONS, copyOptions);
+    }
+
+    public void upload(Path source, String target,
+                       Set<PosixFilePermission> dirPermissions,
+                       Set<PosixFilePermission> filePermissions,
+                       CopyOption... copyOptions) throws Exception {
+        performWithContext(ctx -> {
+            upload(ctx, Files.newByteChannel(source), ctx.fileSystem.getPath(target), WRITE_BUFFER_SIZE,
+                    dirPermissions, filePermissions, copyOptions);
             return null;
-        };
-        performWithContext(action);
+        });
+    }
+
+    public void upload(InputStream source, Path target, CopyOption... copyOptions) throws Exception {
+        upload(source, target, DEFAULT_DIR_PERMISSIONS, DEFAULT_FILE_PERMISSIONS, copyOptions);
+    }
+
+    public void upload(InputStream source, Path target,
+                       Set<PosixFilePermission> dirPermissions,
+                       Set<PosixFilePermission> filePermissions,
+                       CopyOption... copyOptions) throws Exception {
+        performWithContext(ctx -> {
+            upload(ctx, Channels.newChannel(source), target, WRITE_BUFFER_SIZE,
+                    dirPermissions, filePermissions, copyOptions);
+            return null;
+        });
+    }
+
+    public void upload(InputStream source, String target, CopyOption... copyOptions) throws Exception {
+        upload(source, target, DEFAULT_DIR_PERMISSIONS, DEFAULT_FILE_PERMISSIONS, copyOptions);
+    }
+
+    public void upload(InputStream source, String target,
+                       Set<PosixFilePermission> dirPermissions,
+                       Set<PosixFilePermission> filePermissions,
+                       CopyOption... copyOptions) throws Exception {
+        performWithContext(ctx -> {
+            upload(ctx, Channels.newChannel(source), ctx.fileSystem.getPath(target), WRITE_BUFFER_SIZE,
+                    dirPermissions, filePermissions, copyOptions);
+            return null;
+        });
     }
 
     public void download(Path source, Path target, CopyOption... copyOptions) throws Exception {
-        WithContext<Object> action = ctx -> {
-            Files.copy(source, target, copyOptions);
+        performWithContext(ctx -> {
+            download(ctx, source, target, READ_BUFFER_SIZE, copyOptions);
             return null;
-        };
-        performWithContext(action);
+        });
     }
 
     public void download(String source, Path target, CopyOption... copyOptions) throws Exception {
-        WithContext<Object> action = ctx -> {
-            try {
-                Path parent = target.getParent();
-                if (!Files.exists(parent)) {
-                    Files.createDirectories(parent);
-                }
-            } catch (FileAlreadyExistsException e) {
-                logger.log(Level.SEVERE, "parent already exists as file: " + target);
-            }
-            Files.copy(ctx.fileSystem.getPath(source), target, copyOptions);
+        performWithContext(ctx -> {
+            download(ctx, ctx.fileSystem.getPath(source), target, READ_BUFFER_SIZE, copyOptions);
             return null;
-        };
-        performWithContext(action);
+        });
+    }
+
+    public void download(Path source, OutputStream target) throws Exception {
+        performWithContext(ctx -> {
+            download(ctx, source, target, READ_BUFFER_SIZE);
+            return null;
+        });
     }
 
     public void download(String source, OutputStream target) throws Exception {
-        WithContext<Object> action = ctx -> {
-            Files.copy(ctx.fileSystem.getPath(source), target);
+        performWithContext(ctx -> {
+            download(ctx, ctx.fileSystem.getPath(source), target, READ_BUFFER_SIZE);
             return null;
-        };
-        performWithContext(action);
+        });
+    }
+
+    public void copy(String source, String target, CopyOption... copyOptions) throws Exception {
+        performWithContext(ctx -> Files.copy(ctx.fileSystem.getPath(source), ctx.fileSystem.getPath(target), copyOptions));
+    }
+
+    public void rename(String source, String target, CopyOption... copyOptions) throws Exception {
+        performWithContext(ctx -> Files.move(ctx.fileSystem.getPath(source), ctx.fileSystem.getPath(target), copyOptions));
     }
 
     public void remove(String source) throws Exception {
-        WithContext<Object> action = ctx -> {
-            Files.deleteIfExists(ctx.fileSystem.getPath(source));
-            return null;
-        };
-        performWithContext(action);
+        performWithContext(ctx -> Files.deleteIfExists(ctx.fileSystem.getPath(source)));
+    }
+
+    private void upload(SFTPContext ctx,
+                        ReadableByteChannel source,
+                        Path target,
+                        int bufferSize,
+                        Set<PosixFilePermission> dirPerms,
+                        Set<PosixFilePermission> filePerms,
+                        CopyOption... copyOptions) throws Exception {
+        prepareForWrite(target, dirPerms, filePerms);
+        transfer(source, ctx.provider.newByteChannel(target, prepareWriteOptions(copyOptions)), bufferSize);
+    }
+
+    private void download(SFTPContext ctx,
+                          Path source,
+                          OutputStream outputStream,
+                          int bufferSize) throws Exception {
+        download(ctx, source, Channels.newChannel(outputStream), bufferSize);
+    }
+
+    private void download(SFTPContext ctx,
+                          Path source,
+                          WritableByteChannel writableByteChannel,
+                          int bufferSize) throws Exception {
+        transfer(ctx.provider.newByteChannel(source, prepareReadOptions()), writableByteChannel,
+                bufferSize);
+    }
+
+    private void download(SFTPContext ctx,
+                          Path source,
+                          Path target,
+                          int bufferSize,
+                          CopyOption... copyOptions) throws Exception {
+        prepareForRead(target);
+        transfer(ctx.provider.newByteChannel(source, prepareReadOptions(copyOptions)),
+                Files.newByteChannel(target, prepareWriteOptions(copyOptions)), bufferSize);
+    }
+
+    private void prepareForRead(Path path) throws IOException {
+        if (path == null) {
+            return;
+        }
+        Path parent = path.getParent();
+        if (parent != null) {
+            if (!Files.exists(parent)) {
+                Files.createDirectories(parent);
+            }
+        }
+        if (!Files.exists(path)) {
+            Files.createFile(path);
+        }
+    }
+
+    private void prepareForWrite(Path path,
+                                 Set<PosixFilePermission> dirPerms,
+                                 Set<PosixFilePermission> filePerms) throws IOException {
+        if (path == null) {
+            return;
+        }
+        Path parent = path.getParent();
+        if (parent != null) {
+            if (!Files.exists(parent)) {
+                Files.createDirectories(parent);
+            }
+            PosixFileAttributeView posixFileAttributeView =
+                    Files.getFileAttributeView(parent, PosixFileAttributeView.class);
+            posixFileAttributeView.setPermissions(dirPerms);
+        }
+        if (!Files.exists(path)) {
+            Files.createFile(path);
+        }
+        PosixFileAttributeView posixFileAttributeView =
+                Files.getFileAttributeView(path, PosixFileAttributeView.class);
+        posixFileAttributeView.setPermissions(filePerms);
+    }
+
+    private Set<? extends OpenOption> prepareReadOptions(CopyOption... copyOptions) {
+        // ignore user copy options
+        return EnumSet.of(StandardOpenOption.READ);
+    }
+
+    private Set<? extends OpenOption> prepareWriteOptions(CopyOption... copyOptions) {
+        Set<? extends OpenOption> options = null;
+        for (CopyOption copyOption : copyOptions) {
+            if (copyOption == StandardCopyOption.REPLACE_EXISTING) {
+                options = EnumSet.of(StandardOpenOption.CREATE, StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING);
+            }
+        }
+        if (options == null) {
+            // we can not use CREATE_NEW, file is already there because of prepareForWrite() -> Files.createFile()
+            options = EnumSet.of(StandardOpenOption.CREATE, StandardOpenOption.WRITE);
+        }
+        return options;
+    }
+
+    private void transfer(ReadableByteChannel readableByteChannel,
+                          WritableByteChannel writableByteChannel,
+                          int bufferSize) throws IOException {
+        ByteBuffer buffer = ByteBuffer.allocate(bufferSize);
+        int read;
+        while ((read = readableByteChannel.read(buffer)) > 0) {
+            buffer.flip();
+            while (read > 0) {
+                read -= writableByteChannel.write(buffer);
+            }
+            buffer.clear();
+        }
     }
 
     private <T> T performWithContext(WithContext<T> action) throws Exception {

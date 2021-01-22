@@ -1,4 +1,5 @@
 dependencies {
-    compile project(':sshd-eddsa')
-    compile "org.bouncycastle:bcpkix-jdk15on:${project.property('bouncycastle.version')}"
+    api project(':sshd-eddsa')
+    api "org.apache.logging.log4j:log4j-api:${project.property('log4j.version')}"
+    implementation "org.bouncycastle:bcpkix-jdk15on:${project.property('bouncycastle.version')}"
 }
