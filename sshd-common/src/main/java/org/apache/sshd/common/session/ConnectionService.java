@@ -22,7 +22,7 @@ import java.io.IOException;
 
 import org.apache.sshd.common.Service;
 import org.apache.sshd.common.channel.Channel;
-import org.apache.sshd.common.forward.ForwardingFilter;
+import org.apache.sshd.common.forward.Forwarder;
 import org.apache.sshd.common.forward.PortForwardingEventListenerManager;
 import org.apache.sshd.common.forward.PortForwardingEventListenerManagerHolder;
 
@@ -41,8 +41,8 @@ public interface ConnectionService
     /**
      * Register a newly created channel with a new unique identifier
      *
-     * @param channel The {@link Channel} to register
-     * @return The assigned id of this channel
+     * @param  channel     The {@link Channel} to register
+     * @return             The assigned id of this channel
      * @throws IOException If failed to initialize and register the channel
      */
     int registerChannel(Channel channel) throws IOException;
@@ -57,9 +57,9 @@ public interface ConnectionService
     /**
      * Retrieve the forwarder instance
      *
-     * @return The {@link ForwardingFilter}
+     * @return The {@link Forwarder}
      */
-    ForwardingFilter getForwardingFilter();
+    Forwarder getForwarder();
 
     boolean isAllowMoreSessions();
 

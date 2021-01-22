@@ -20,6 +20,7 @@
 package org.apache.sshd.fs;
 
 import java.net.URI;
+import java.time.Duration;
 import java.util.Map;
 
 import org.apache.sshd.common.PropertyResolver;
@@ -36,11 +37,11 @@ public class SftpFileSystemInitializationContext {
     private int port;
     private BasicCredentialsProvider credentials;
     private PropertyResolver propertyResolver;
-    private long maxConnectTime;
-    private long maxAuthTime;
+    private Duration maxConnectTime;
+    private Duration maxAuthTime;
 
     /**
-     * @param id The unique identifier assigned to the file-system being created
+     * @param id  The unique identifier assigned to the file-system being created
      * @param uri The original {@link URI} that triggered the file-system creation
      * @param env The environment settings passed along with the URI (may be {@code null})
      */
@@ -102,8 +103,7 @@ public class SftpFileSystemInitializationContext {
     }
 
     /**
-     * @return A {@link PropertyResolver} for easy access of any query parameters
-     * encoded in the URI
+     * @return A {@link PropertyResolver} for easy access of any query parameters encoded in the URI
      */
     public PropertyResolver getPropertyResolver() {
         return propertyResolver;
@@ -116,22 +116,22 @@ public class SftpFileSystemInitializationContext {
     /**
      * @return The <U>resolved</U> max. connect timeout (msec.)
      */
-    public long getMaxConnectTime() {
+    public Duration getMaxConnectTime() {
         return maxConnectTime;
     }
 
-    public void setMaxConnectTime(long maxConnectTime) {
+    public void setMaxConnectTime(Duration maxConnectTime) {
         this.maxConnectTime = maxConnectTime;
     }
 
     /**
      * @return The <U>resolved</U> max. authentication timeout (msec.)
      */
-    public long getMaxAuthTime() {
+    public Duration getMaxAuthTime() {
         return maxAuthTime;
     }
 
-    public void setMaxAuthTime(long maxAuthTime) {
+    public void setMaxAuthTime(Duration maxAuthTime) {
         this.maxAuthTime = maxAuthTime;
     }
 

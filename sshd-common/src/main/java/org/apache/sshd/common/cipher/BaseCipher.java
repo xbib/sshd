@@ -33,6 +33,7 @@ public class BaseCipher implements Cipher {
 
     private javax.crypto.Cipher cipher;
     private final int ivsize;
+    private final int authSize;
     private final int kdfSize;
     private final String algorithm;
     private final int keySize;
@@ -41,9 +42,10 @@ public class BaseCipher implements Cipher {
     private String s;
 
     public BaseCipher(
-            int ivsize, int kdfSize, String algorithm,
-            int keySize, String transformation, int blkSize) {
+                      int ivsize, int authSize, int kdfSize, String algorithm,
+                      int keySize, String transformation, int blkSize) {
         this.ivsize = ivsize;
+        this.authSize = authSize;
         this.kdfSize = kdfSize;
         this.algorithm = ValidateUtils.checkNotNullAndNotEmpty(algorithm, "No algorithm");
         this.keySize = keySize;
@@ -72,6 +74,11 @@ public class BaseCipher implements Cipher {
     }
 
     @Override
+    public int getAuthenticationTagSize() {
+        return authSize;
+    }
+
+    @Override
     public int getKdfSize() {
         return kdfSize;
     }
@@ -95,11 +102,11 @@ public class BaseCipher implements Cipher {
     protected javax.crypto.Cipher createCipherInstance(Mode mode, byte[] key, byte[] iv) throws Exception {
         javax.crypto.Cipher instance = SecurityUtils.getCipher(getTransformation());
         instance.init(
-            Mode.Encrypt.equals(mode)
-                ? javax.crypto.Cipher.ENCRYPT_MODE
-                : javax.crypto.Cipher.DECRYPT_MODE,
-            new SecretKeySpec(key, getAlgorithm()),
-            new IvParameterSpec(iv));
+                Mode.Encrypt.equals(mode)
+                        ? javax.crypto.Cipher.ENCRYPT_MODE
+                        : javax.crypto.Cipher.DECRYPT_MODE,
+                new SecretKeySpec(key, getAlgorithm()),
+                new IvParameterSpec(iv));
         return instance;
     }
 
@@ -114,6 +121,11 @@ public class BaseCipher implements Cipher {
     @Override
     public void update(byte[] input, int inputOffset, int inputLen) throws Exception {
         cipher.update(input, inputOffset, inputLen, input, inputOffset);
+    }
+
+    @Override
+    public void updateAAD(byte[] data, int offset, int length) throws Exception {
+        throw new UnsupportedOperationException(getClass() + " does not support AAD operations");
     }
 
     protected static byte[] resize(byte[] data, int size) {

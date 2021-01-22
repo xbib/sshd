@@ -40,10 +40,10 @@ import org.apache.sshd.common.SyspropsMapWrapper;
 import org.apache.sshd.common.channel.ChannelFactory;
 import org.apache.sshd.common.channel.ChannelListener;
 import org.apache.sshd.common.channel.RequestHandler;
-import org.apache.sshd.common.channel.throttle.ChannelStreamPacketWriterResolver;
+import org.apache.sshd.common.channel.throttle.ChannelStreamWriterResolver;
 import org.apache.sshd.common.config.VersionProperties;
 import org.apache.sshd.common.file.FileSystemFactory;
-import org.apache.sshd.common.forward.ForwardingFilterFactory;
+import org.apache.sshd.common.forward.ForwarderFactory;
 import org.apache.sshd.common.forward.PortForwardingEventListener;
 import org.apache.sshd.common.io.DefaultIoServiceFactoryFactory;
 import org.apache.sshd.common.io.IoServiceEventListener;
@@ -61,6 +61,8 @@ import org.apache.sshd.common.session.helpers.SessionTimeoutListener;
 import org.apache.sshd.common.util.EventListenerUtils;
 import org.apache.sshd.common.util.ValidateUtils;
 import org.apache.sshd.common.util.threads.ThreadUtils;
+import org.apache.sshd.common.CoreModuleProperties;
+import org.apache.sshd.common.forward.ForwardingFilter;
 
 /**
  * @author <a href="mailto:dev@mina.apache.org">Apache MINA SSHD Project</a>
@@ -72,7 +74,8 @@ public abstract class AbstractFactoryManager extends AbstractKexFactoryManager i
     protected List<ChannelFactory> channelFactories;
     protected ScheduledExecutorService executor;
     protected boolean shutdownExecutor;
-    protected ForwardingFilterFactory forwarderFactory;
+    protected ForwarderFactory forwarderFactory;
+    protected ForwardingFilter forwardingFilter;
     protected FileSystemFactory fileSystemFactory;
     protected List<ServiceFactory> serviceFactories;
     protected List<RequestHandler<ConnectionService>> globalRequestHandlers;
@@ -90,15 +93,14 @@ public abstract class AbstractFactoryManager extends AbstractKexFactoryManager i
     private PropertyResolver parentResolver = SyspropsMapWrapper.SYSPROPS_RESOLVER;
     private ReservedSessionMessagesHandler reservedSessionMessagesHandler;
     private SessionDisconnectHandler sessionDisconnectHandler;
-    private ChannelStreamPacketWriterResolver channelStreamPacketWriterResolver;
+    private ChannelStreamWriterResolver channelStreamWriterResolver;
     private UnknownChannelReferenceHandler unknownChannelReferenceHandler;
     private IoServiceEventListener eventListener;
 
     protected AbstractFactoryManager() {
-        ClassLoader loader = getClass().getClassLoader();
-        sessionListenerProxy = EventListenerUtils.proxyWrapper(SessionListener.class, loader, sessionListeners);
-        channelListenerProxy = EventListenerUtils.proxyWrapper(ChannelListener.class, loader, channelListeners);
-        tunnelListenerProxy = EventListenerUtils.proxyWrapper(PortForwardingEventListener.class, loader, tunnelListeners);
+        sessionListenerProxy = EventListenerUtils.proxyWrapper(SessionListener.class, sessionListeners);
+        channelListenerProxy = EventListenerUtils.proxyWrapper(ChannelListener.class, channelListeners);
+        tunnelListenerProxy = EventListenerUtils.proxyWrapper(PortForwardingEventListener.class, tunnelListeners);
     }
 
     @Override
@@ -162,7 +164,8 @@ public abstract class AbstractFactoryManager extends AbstractKexFactoryManager i
     @Override
     @SuppressWarnings({ "unchecked", "rawtypes" })
     public <T> T computeAttributeIfAbsent(
-            AttributeKey<T> key, Function<? super AttributeKey<T>, ? extends T> resolver) {
+            AttributeKey<T> key,
+            Function<? super AttributeKey<T>, ? extends T> resolver) {
         return (T) attributes.computeIfAbsent(Objects.requireNonNull(key, "No key"), (Function) resolver);
     }
 
@@ -197,7 +200,8 @@ public abstract class AbstractFactoryManager extends AbstractKexFactoryManager i
     @Override
     public String getVersion() {
         String version = PropertyResolverUtils.getStringProperty(
-            VersionProperties.getVersionProperties(), VersionProperties.REPORTED_VERSION, DEFAULT_VERSION);
+                VersionProperties.getVersionProperties(),
+                VersionProperties.REPORTED_VERSION, FactoryManager.DEFAULT_VERSION);
         return version.toUpperCase();
     }
 
@@ -211,20 +215,11 @@ public abstract class AbstractFactoryManager extends AbstractKexFactoryManager i
     }
 
     public int getNioWorkers() {
-        int nb = this.getIntProperty(NIO_WORKERS, DEFAULT_NIO_WORKERS);
-        if (nb > 0) {
-            return nb;
-        } else {    // it may have been configured to a negative value
-            return DEFAULT_NIO_WORKERS;
-        }
+        return CoreModuleProperties.NIO_WORKERS.getRequired(this);
     }
 
     public void setNioWorkers(int nioWorkers) {
-        if (nioWorkers > 0) {
-            PropertyResolverUtils.updateProperty(this, NIO_WORKERS, nioWorkers);
-        } else {
-            PropertyResolverUtils.updateProperty(this, NIO_WORKERS, null);
-        }
+        CoreModuleProperties.NIO_WORKERS.set(this, nioWorkers);
     }
 
     @Override
@@ -242,12 +237,16 @@ public abstract class AbstractFactoryManager extends AbstractKexFactoryManager i
     }
 
     @Override
-    public ForwardingFilterFactory getForwarderFactory() {
+    public ForwarderFactory getForwarderFactory() {
         return forwarderFactory;
     }
 
-    public void setForwarderFactory(ForwardingFilterFactory forwarderFactory) {
+    public void setForwarderFactory(ForwarderFactory forwarderFactory) {
         this.forwarderFactory = forwarderFactory;
+    }
+
+    public void setForwardingFilter(ForwardingFilter forwardingFilter) {
+        this.forwardingFilter = forwardingFilter;
     }
 
     @Override
@@ -298,13 +297,13 @@ public abstract class AbstractFactoryManager extends AbstractKexFactoryManager i
     }
 
     @Override
-    public ChannelStreamPacketWriterResolver getChannelStreamPacketWriterResolver() {
-        return channelStreamPacketWriterResolver;
+    public ChannelStreamWriterResolver getChannelStreamWriterResolver() {
+        return channelStreamWriterResolver;
     }
 
     @Override
-    public void setChannelStreamPacketWriterResolver(ChannelStreamPacketWriterResolver resolver) {
-        channelStreamPacketWriterResolver = resolver;
+    public void setChannelStreamWriterResolver(ChannelStreamWriterResolver resolver) {
+        channelStreamWriterResolver = resolver;
     }
 
     @Override
@@ -509,7 +508,8 @@ public abstract class AbstractFactoryManager extends AbstractKexFactoryManager i
         Objects.requireNonNull(getRandomFactory(), "RandomFactory not set");
 
         if (getIoServiceFactoryFactory() == null) {
-            setIoServiceFactoryFactory(DefaultIoServiceFactoryFactory.getDefaultIoServiceFactoryFactoryInstance());
+            IoServiceFactoryFactory defaultFactory = DefaultIoServiceFactoryFactory.getDefaultIoServiceFactoryFactoryInstance();
+            setIoServiceFactoryFactory(defaultFactory);
         }
     }
 }

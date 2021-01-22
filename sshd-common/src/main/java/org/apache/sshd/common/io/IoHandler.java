@@ -31,5 +31,4 @@ public interface IoHandler {
     void exceptionCaught(IoSession session, Throwable cause) throws Exception;
 
     void messageReceived(IoSession session, Readable message) throws Exception;
-
 }

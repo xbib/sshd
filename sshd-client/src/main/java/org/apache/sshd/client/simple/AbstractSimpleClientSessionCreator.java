@@ -82,6 +82,16 @@ public abstract class AbstractSimpleClientSessionCreator extends AbstractSimpleC
         return loginSession(connect(username, target), identity);
     }
 
+    @Override
+    public ClientSession sessionLogin(String uri, String password) throws IOException {
+        return loginSession(connect(uri), password);
+    }
+
+    @Override
+    public ClientSession sessionLogin(String uri, KeyPair identity) throws IOException {
+        return loginSession(connect(uri), identity);
+    }
+
     protected ClientSession loginSession(ConnectFuture future, String password) throws IOException {
         return authSession(future.verify(getConnectTimeout()), password);
     }
@@ -131,17 +141,22 @@ public abstract class AbstractSimpleClientSessionCreator extends AbstractSimpleC
     /**
      * Wraps an existing {@link ClientSessionCreator} into a {@link SimpleClient}
      *
-     * @param creator The {@link ClientSessionCreator} - never {@code null}
-     * @param channel The {@link Channel} representing the creator for
-     * relaying {@link #isOpen()} and {@link #close()} calls
-     * @return The {@link SimpleClient} wrapper. <B>Note:</B> closing the wrapper
-     * also closes the underlying sessions creator.
+     * @param  creator The {@link ClientSessionCreator} - never {@code null}
+     * @param  channel The {@link Channel} representing the creator for relaying {@link #isOpen()} and {@link #close()}
+     *                 calls
+     * @return         The {@link SimpleClient} wrapper. <B>Note:</B> closing the wrapper also closes the underlying
+     *                 sessions creator.
      */
     @SuppressWarnings("checkstyle:anoninnerlength")
     public static SimpleClient wrap(ClientSessionCreator creator, Channel channel) {
         Objects.requireNonNull(creator, "No sessions creator");
         Objects.requireNonNull(channel, "No channel");
         return new AbstractSimpleClientSessionCreator() {
+            @Override
+            public ConnectFuture connect(String uri) throws IOException {
+                return creator.connect(uri);
+            }
+
             @Override
             public ConnectFuture connect(String username, String host, int port) throws IOException {
                 return creator.connect(username, host, port);
@@ -177,21 +192,21 @@ public abstract class AbstractSimpleClientSessionCreator extends AbstractSimpleC
             @Override
             public ConnectFuture connect(
                     HostConfigEntry hostConfig, AttributeRepository context, SocketAddress localAddress)
-                        throws IOException {
+                    throws IOException {
                 return creator.connect(hostConfig, context, localAddress);
             }
 
             @Override
             public ConnectFuture connect(
                     String username, SocketAddress targetAddress, AttributeRepository context, SocketAddress localAddress)
-                        throws IOException {
+                    throws IOException {
                 return creator.connect(username, targetAddress, context, localAddress);
             }
 
             @Override
             public ConnectFuture connect(
                     String username, String host, int port, AttributeRepository context, SocketAddress localAddress)
-                        throws IOException {
+                    throws IOException {
                 return creator.connect(username, host, port, context, localAddress);
             }
 

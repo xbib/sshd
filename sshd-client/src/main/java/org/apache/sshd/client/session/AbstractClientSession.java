@@ -23,6 +23,7 @@ import java.io.IOException;
 import java.net.SocketAddress;
 import java.security.KeyPair;
 import java.security.PublicKey;
+import java.util.Collections;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
@@ -32,8 +33,11 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import org.apache.sshd.client.ClientFactoryManager;
 import org.apache.sshd.client.auth.AuthenticationIdentitiesProvider;
 import org.apache.sshd.client.auth.UserAuthFactory;
+import org.apache.sshd.client.auth.hostbased.HostBasedAuthenticationReporter;
 import org.apache.sshd.client.auth.keyboard.UserInteraction;
+import org.apache.sshd.client.auth.password.PasswordAuthenticationReporter;
 import org.apache.sshd.client.auth.password.PasswordIdentityProvider;
+import org.apache.sshd.client.auth.pubkey.PublicKeyAuthenticationReporter;
 import org.apache.sshd.client.channel.ChannelDirectTcpip;
 import org.apache.sshd.client.channel.ChannelExec;
 import org.apache.sshd.client.channel.ChannelShell;
@@ -43,7 +47,6 @@ import org.apache.sshd.client.keyverifier.ServerKeyVerifier;
 import org.apache.sshd.common.AttributeRepository;
 import org.apache.sshd.common.FactoryManager;
 import org.apache.sshd.common.NamedResource;
-import org.apache.sshd.common.PropertyResolverUtils;
 import org.apache.sshd.common.RuntimeSshException;
 import org.apache.sshd.common.SshConstants;
 import org.apache.sshd.common.SshException;
@@ -52,7 +55,8 @@ import org.apache.sshd.common.channel.PtyChannelConfigurationHolder;
 import org.apache.sshd.common.cipher.BuiltinCiphers;
 import org.apache.sshd.common.cipher.CipherNone;
 import org.apache.sshd.common.config.keys.KeyUtils;
-import org.apache.sshd.common.forward.ForwardingFilter;
+import org.apache.sshd.common.config.keys.OpenSshCertificate;
+import org.apache.sshd.common.forward.Forwarder;
 import org.apache.sshd.common.future.DefaultKeyExchangeFuture;
 import org.apache.sshd.common.future.KeyExchangeFuture;
 import org.apache.sshd.common.io.IoSession;
@@ -71,6 +75,7 @@ import org.apache.sshd.common.util.GenericUtils;
 import org.apache.sshd.common.util.ValidateUtils;
 import org.apache.sshd.common.util.buffer.Buffer;
 import org.apache.sshd.common.util.net.SshdSocketAddress;
+import org.apache.sshd.common.CoreModuleProperties;
 
 /**
  * Provides default implementations of {@link ClientSession} related methods
@@ -78,28 +83,33 @@ import org.apache.sshd.common.util.net.SshdSocketAddress;
  * @author <a href="mailto:dev@mina.apache.org">Apache MINA SSHD Project</a>
  */
 public abstract class AbstractClientSession extends AbstractSession implements ClientSession {
-    protected final boolean sendImmediateIdentification;
+    protected final boolean sendImmediateClientIdentification;
+    protected final boolean sendImmediateKexInit;
 
     private final List<Object> identities = new CopyOnWriteArrayList<>();
     private final AuthenticationIdentitiesProvider identitiesProvider;
     private final AttributeRepository connectionContext;
 
+    private PublicKey serverKey;
     private ServerKeyVerifier serverKeyVerifier;
     private UserInteraction userInteraction;
     private PasswordIdentityProvider passwordIdentityProvider;
+    private PasswordAuthenticationReporter passwordAuthenticationReporter;
     private KeyIdentityProvider keyIdentityProvider;
+    private PublicKeyAuthenticationReporter publicKeyAuthenticationReporter;
+    private HostBasedAuthenticationReporter hostBasedAuthenticationReporter;
     private List<UserAuthFactory> userAuthFactories;
     private SocketAddress connectAddress;
     private ClientProxyConnector proxyConnector;
 
     protected AbstractClientSession(ClientFactoryManager factoryManager, IoSession ioSession) {
         super(false, factoryManager, ioSession);
-        this.sendImmediateIdentification = PropertyResolverUtils.getBooleanProperty(
-            factoryManager, ClientFactoryManager.SEND_IMMEDIATE_IDENTIFICATION,
-            ClientFactoryManager.DEFAULT_SEND_IMMEDIATE_IDENTIFICATION);
+
+        sendImmediateClientIdentification = CoreModuleProperties.SEND_IMMEDIATE_IDENTIFICATION.getRequired(this);
+        sendImmediateKexInit = CoreModuleProperties.SEND_IMMEDIATE_KEXINIT.getRequired(this);
 
         identitiesProvider = AuthenticationIdentitiesProvider.wrapIdentities(identities);
-        this.connectionContext = (AttributeRepository) ioSession.getAttribute(AttributeRepository.class);
+        connectionContext = (AttributeRepository) ioSession.getAttribute(AttributeRepository.class);
     }
 
     @Override
@@ -122,6 +132,20 @@ public abstract class AbstractClientSession extends AbstractSession implements C
     }
 
     @Override
+    public PublicKey getServerKey() {
+        return serverKey;
+    }
+
+    public void setServerKey(PublicKey serverKey) {
+        if (log.isDebugEnabled()) {
+            log.debug("setServerKey({}) keyType={}, digest={}",
+                    this, KeyUtils.getKeyType(serverKey), KeyUtils.getFingerPrint(serverKey));
+        }
+
+        this.serverKey = serverKey;
+    }
+
+    @Override
     public ServerKeyVerifier getServerKeyVerifier() {
         ClientFactoryManager manager = getFactoryManager();
         return resolveEffectiveProvider(ServerKeyVerifier.class, serverKeyVerifier, manager.getServerKeyVerifier());
@@ -141,6 +165,18 @@ public abstract class AbstractClientSession extends AbstractSession implements C
     @Override
     public void setUserInteraction(UserInteraction userInteraction) {
         this.userInteraction = userInteraction; // OK if null - inherit from parent
+    }
+
+    @Override
+    public PasswordAuthenticationReporter getPasswordAuthenticationReporter() {
+        ClientFactoryManager manager = getFactoryManager();
+        return resolveEffectiveProvider(PasswordAuthenticationReporter.class, passwordAuthenticationReporter,
+                manager.getPasswordAuthenticationReporter());
+    }
+
+    @Override
+    public void setPasswordAuthenticationReporter(PasswordAuthenticationReporter reporter) {
+        this.passwordAuthenticationReporter = reporter;
     }
 
     @Override
@@ -181,6 +217,30 @@ public abstract class AbstractClientSession extends AbstractSession implements C
     @Override
     public void setKeyIdentityProvider(KeyIdentityProvider keyIdentityProvider) {
         this.keyIdentityProvider = keyIdentityProvider;
+    }
+
+    @Override
+    public PublicKeyAuthenticationReporter getPublicKeyAuthenticationReporter() {
+        ClientFactoryManager manager = getFactoryManager();
+        return resolveEffectiveProvider(PublicKeyAuthenticationReporter.class, publicKeyAuthenticationReporter,
+                manager.getPublicKeyAuthenticationReporter());
+    }
+
+    @Override
+    public void setPublicKeyAuthenticationReporter(PublicKeyAuthenticationReporter reporter) {
+        this.publicKeyAuthenticationReporter = reporter;
+    }
+
+    @Override
+    public HostBasedAuthenticationReporter getHostBasedAuthenticationReporter() {
+        ClientFactoryManager manager = getFactoryManager();
+        return resolveEffectiveProvider(HostBasedAuthenticationReporter.class, hostBasedAuthenticationReporter,
+                manager.getHostBasedAuthenticationReporter());
+    }
+
+    @Override
+    public void setHostBasedAuthenticationReporter(HostBasedAuthenticationReporter reporter) {
+        this.hostBasedAuthenticationReporter = reporter;
     }
 
     @Override
@@ -248,9 +308,7 @@ public abstract class AbstractClientSession extends AbstractSession implements C
         }
     }
 
-    protected void initializeKexPhase() throws Exception {
-        sendClientIdentification();
-
+    protected void initializeKeyExchangePhase() throws Exception {
         KexExtensionHandler extHandler = getKexExtensionHandler();
         if ((extHandler == null) || (!extHandler.isKexExtensionsAvailable(this, AvailabilityPhase.PREKEX))) {
             kexState.set(KexState.INIT);
@@ -283,11 +341,8 @@ public abstract class AbstractClientSession extends AbstractSession implements C
                 log.debug("initializeProxyConnector({}) proxy={} initialized", this, proxyConnector);
             }
         } catch (Throwable t) {
-            log.warn("initializeProxyConnector({}) failed ({}) to send proxy metadata: {}",
-                this, t.getClass().getSimpleName(), t.getMessage());
-            if (debugEnabled) {
-                log.debug("initializeProxyConnector(" + this + ") proxy metadata send failure details", t);
-            }
+            warn("initializeProxyConnector({}) failed ({}) to send proxy metadata: {}",
+                    this, t.getClass().getSimpleName(), t.getMessage(), t);
 
             if (t instanceof Exception) {
                 throw (Exception) t;
@@ -298,8 +353,10 @@ public abstract class AbstractClientSession extends AbstractSession implements C
     }
 
     protected IoWriteFuture sendClientIdentification() throws Exception {
-        clientVersion = resolveIdentificationString(ClientFactoryManager.CLIENT_IDENTIFICATION);
-        return sendIdentification(clientVersion);
+        clientVersion = resolveIdentificationString(CoreModuleProperties.CLIENT_IDENTIFICATION.getName());
+        // Note: we intentionally use an unmodifiable list in order to enforce the fact that client cannot send header lines
+        signalSendIdentification(clientVersion, Collections.emptyList());
+        return sendIdentification(clientVersion, Collections.emptyList());
     }
 
     @Override
@@ -316,7 +373,7 @@ public abstract class AbstractClientSession extends AbstractSession implements C
         } else if (Channel.CHANNEL_SUBSYSTEM.equals(type)) {
             return createSubsystemChannel(subType);
         } else {
-            throw new IllegalArgumentException("Unsupported channel type " + type);
+            throw new IllegalArgumentException("Unsupported channel type requested: " + type);
         }
     }
 
@@ -367,45 +424,45 @@ public abstract class AbstractClientSession extends AbstractSession implements C
     @Override
     public SshdSocketAddress startLocalPortForwarding(SshdSocketAddress local, SshdSocketAddress remote)
             throws IOException {
-        ForwardingFilter filter = getForwardingFilter();
-        return filter.startLocalPortForwarding(local, remote);
+        Forwarder forwarder = getForwarder();
+        return forwarder.startLocalPortForwarding(local, remote);
     }
 
     @Override
     public void stopLocalPortForwarding(SshdSocketAddress local) throws IOException {
-        ForwardingFilter filter = getForwardingFilter();
-        filter.stopLocalPortForwarding(local);
+        Forwarder forwarder = getForwarder();
+        forwarder.stopLocalPortForwarding(local);
     }
 
     @Override
     public SshdSocketAddress startRemotePortForwarding(SshdSocketAddress remote, SshdSocketAddress local)
             throws IOException {
-        ForwardingFilter filter = getForwardingFilter();
-        return filter.startRemotePortForwarding(remote, local);
+        Forwarder forwarder = getForwarder();
+        return forwarder.startRemotePortForwarding(remote, local);
     }
 
     @Override
     public void stopRemotePortForwarding(SshdSocketAddress remote) throws IOException {
-        ForwardingFilter filter = getForwardingFilter();
-        filter.stopRemotePortForwarding(remote);
+        Forwarder forwarder = getForwarder();
+        forwarder.stopRemotePortForwarding(remote);
     }
 
     @Override
     public SshdSocketAddress startDynamicPortForwarding(SshdSocketAddress local) throws IOException {
-        ForwardingFilter filter = getForwardingFilter();
-        return filter.startDynamicPortForwarding(local);
+        Forwarder forwarder = getForwarder();
+        return forwarder.startDynamicPortForwarding(local);
     }
 
     @Override
     public void stopDynamicPortForwarding(SshdSocketAddress local) throws IOException {
-        ForwardingFilter filter = getForwardingFilter();
-        filter.stopDynamicPortForwarding(local);
+        Forwarder forwarder = getForwarder();
+        forwarder.stopDynamicPortForwarding(local);
     }
 
     @Override
-    protected ForwardingFilter getForwardingFilter() {
+    protected Forwarder getForwarder() {
         ConnectionService service = Objects.requireNonNull(getConnectionService(), "No connection service");
-        return Objects.requireNonNull(service.getForwardingFilter(), "No forwarder");
+        return Objects.requireNonNull(service.getForwarder(), "No forwarder");
     }
 
     @Override
@@ -459,13 +516,21 @@ public abstract class AbstractClientSession extends AbstractSession implements C
         }
 
         if (!SessionContext.isValidVersionPrefix(serverVersion)) {
-            throw new SshException(SshConstants.SSH2_DISCONNECT_PROTOCOL_VERSION_NOT_SUPPORTED,
-                "Unsupported protocol version: " + serverVersion);
+            throw new SshException(
+                    SshConstants.SSH2_DISCONNECT_PROTOCOL_VERSION_NOT_SUPPORTED,
+                    "Unsupported protocol version: " + serverVersion);
         }
 
         signalExtraServerVersionInfo(serverVersion, ident);
-        if (!sendImmediateIdentification) {
-            initializeKexPhase();
+
+        // Now that we have the server's identity reported see if have delayed any of our duties...
+        if (!sendImmediateClientIdentification) {
+            sendClientIdentification();
+            // if client identification not sent then KEX-INIT was not sent either
+            initializeKeyExchangePhase();
+        } else if (!sendImmediateKexInit) {
+            // if client identification sent, perhaps we delayed KEX-INIT
+            initializeKeyExchangePhase();
         }
 
         return true;
@@ -484,19 +549,14 @@ public abstract class AbstractClientSession extends AbstractSession implements C
                 ui.serverVersionInfo(this, lines);
             }
         } catch (Error e) {
-            log.warn("signalExtraServerVersionInfo({})[{}] failed ({}) to consult interaction: {}",
-                this, version, e.getClass().getSimpleName(), e.getMessage());
-            if (log.isDebugEnabled()) {
-                log.debug("signalExtraServerVersionInfo(" + this + ")[" + version
-                        + "] interaction consultation failure details", e);
-            }
-
+            warn("signalExtraServerVersionInfo({})[{}] failed ({}) to consult interaction: {}",
+                    this, version, e.getClass().getSimpleName(), e.getMessage(), e);
             throw new RuntimeSshException(e);
         }
     }
 
     @Override
-    protected byte[] sendKexInit(Map<KexProposalOption, String> proposal) throws IOException {
+    protected byte[] sendKexInit(Map<KexProposalOption, String> proposal) throws Exception {
         mergeProposals(clientProposal, proposal);
         return super.sendKexInit(proposal);
     }
@@ -510,8 +570,8 @@ public abstract class AbstractClientSession extends AbstractSession implements C
     protected byte[] receiveKexInit(Buffer buffer) throws Exception {
         byte[] seed = super.receiveKexInit(buffer);
         /*
-         * Check if the session has delayed its KEX-INIT until the server's one was
-         * received in order to support KEX extension negotiation (RFC 8308).
+         * Check if the session has delayed its KEX-INIT until the server's one was received in order to support KEX
+         * extension negotiation (RFC 8308).
          */
         if (kexState.compareAndSet(KexState.UNKNOWN, KexState.RUN)) {
             if (log.isDebugEnabled()) {
@@ -531,15 +591,37 @@ public abstract class AbstractClientSession extends AbstractSession implements C
     }
 
     @Override
-    protected void checkKeys() throws SshException {
+    protected void checkKeys() throws IOException {
         ServerKeyVerifier serverKeyVerifier = Objects.requireNonNull(getServerKeyVerifier(), "No server key verifier");
         IoSession networkSession = getIoSession();
         SocketAddress remoteAddress = networkSession.getRemoteAddress();
-        PublicKey serverKey = kex.getServerKey();
-        boolean verified = serverKeyVerifier.verifyServerKey(this, remoteAddress, serverKey);
-        if (log.isDebugEnabled()) {
-            log.debug("checkKeys({}) key={}-{}, verified={}", this, KeyUtils.getKeyType(serverKey),
-                    KeyUtils.getFingerPrint(serverKey), verified);
+        PublicKey serverKey = Objects.requireNonNull(getServerKey(), "No server key to verify");
+        SshdSocketAddress targetServerAddress = getAttribute(ClientSessionCreator.TARGET_SERVER);
+        if (targetServerAddress != null) {
+            remoteAddress = targetServerAddress.toInetSocketAddress();
+        }
+
+        boolean verified = false;
+        if (serverKey instanceof OpenSshCertificate) {
+            // check if we trust the CA
+            verified = serverKeyVerifier.verifyServerKey(this, remoteAddress, ((OpenSshCertificate) serverKey).getCaPubKey());
+            if (log.isDebugEnabled()) {
+                log.debug("checkCA({}) key={}-{}, verified={}",
+                        this, KeyUtils.getKeyType(serverKey), KeyUtils.getFingerPrint(serverKey), verified);
+            }
+
+            if (!verified) {
+                // fallback to actual public host key
+                serverKey = ((OpenSshCertificate) serverKey).getServerHostKey();
+            }
+        }
+
+        if (!verified) {
+            verified = serverKeyVerifier.verifyServerKey(this, remoteAddress, serverKey);
+            if (log.isDebugEnabled()) {
+                log.debug("checkKeys({}) key={}-{}, verified={}",
+                        this, KeyUtils.getKeyType(serverKey), KeyUtils.getFingerPrint(serverKey), verified);
+            }
         }
 
         if (!verified) {
@@ -601,10 +683,13 @@ public abstract class AbstractClientSession extends AbstractSession implements C
                 proposal.put(KexProposalOption.C2SENC, BuiltinCiphers.Constants.NONE);
                 proposal.put(KexProposalOption.S2CENC, BuiltinCiphers.Constants.NONE);
 
-                byte[] seed;
-                synchronized (kexState) {
-                    seed = sendKexInit(proposal);
-                    setKexSeed(seed);
+                try {
+                    synchronized (kexState) {
+                        byte[] seed = sendKexInit(proposal);
+                        setKexSeed(seed);
+                    }
+                } catch (Exception e) {
+                    GenericUtils.rethrowAsIoException(e);
                 }
             }
 

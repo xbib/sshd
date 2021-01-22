@@ -26,14 +26,13 @@ package org.apache.sshd.common.future;
 public interface CloseFuture extends SshFuture<CloseFuture> {
 
     /**
-     * @return true if the close request is finished and the target is closed.
+     * @return <tt>true</tt> if the close request is finished and the target is closed.
      */
     boolean isClosed();
 
     /**
-     * Marks this future as closed and notifies all threads waiting for this
-     * future. This method is invoked by SSHD internally. Please do not call
-     * this method directly.
+     * Marks this future as closed and notifies all threads waiting for this future. This method is invoked by SSHD
+     * internally. Please do not call this method directly.
      */
     void setClosed();
 

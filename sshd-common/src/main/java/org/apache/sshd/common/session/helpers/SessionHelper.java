@@ -22,6 +22,8 @@ import java.io.IOException;
 import java.io.StreamCorruptedException;
 import java.net.SocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -43,14 +45,13 @@ import org.apache.sshd.common.AttributeRepository;
 import org.apache.sshd.common.FactoryManager;
 import org.apache.sshd.common.NamedResource;
 import org.apache.sshd.common.PropertyResolver;
-import org.apache.sshd.common.PropertyResolverUtils;
 import org.apache.sshd.common.RuntimeSshException;
 import org.apache.sshd.common.SshConstants;
 import org.apache.sshd.common.SshException;
-import org.apache.sshd.common.channel.throttle.ChannelStreamPacketWriterResolver;
-import org.apache.sshd.common.channel.throttle.ChannelStreamPacketWriterResolverManager;
+import org.apache.sshd.common.channel.throttle.ChannelStreamWriterResolver;
+import org.apache.sshd.common.channel.throttle.ChannelStreamWriterResolverManager;
 import org.apache.sshd.common.digest.Digest;
-import org.apache.sshd.common.forward.ForwardingFilter;
+import org.apache.sshd.common.forward.Forwarder;
 import org.apache.sshd.common.future.DefaultSshFuture;
 import org.apache.sshd.common.io.IoSession;
 import org.apache.sshd.common.io.IoWriteFuture;
@@ -72,6 +73,7 @@ import org.apache.sshd.common.util.buffer.Buffer;
 import org.apache.sshd.common.util.buffer.BufferUtils;
 import org.apache.sshd.common.util.buffer.ByteArrayBuffer;
 import org.apache.sshd.common.util.net.SshdSocketAddress;
+import org.apache.sshd.common.CoreModuleProperties;
 
 /**
  * Contains split code in order to make {@link AbstractSession} class smaller
@@ -79,6 +81,10 @@ import org.apache.sshd.common.util.net.SshdSocketAddress;
 public abstract class SessionHelper extends AbstractKexFactoryManager implements Session {
     /** Session level lock for regulating access to sensitive data */
     protected final Object sessionLock = new Object();
+
+    // Session timeout measurements
+    protected Instant authStart = Instant.now();
+    protected Instant idleStart = Instant.now();
 
     /** Client or server side */
     private final boolean serverSession;
@@ -90,17 +96,15 @@ public abstract class SessionHelper extends AbstractKexFactoryManager implements
     private final Map<String, Object> properties = new ConcurrentHashMap<>();
 
     /** Session specific attributes */
-    private final Map<AttributeRepository.AttributeKey<?>, Object> attributes = new ConcurrentHashMap<>();
+    private final Map<AttributeKey<?>, Object> attributes = new ConcurrentHashMap<>();
 
     // Session timeout measurements
-    private long authTimeoutStart = System.currentTimeMillis();
-    private long idleTimeoutStart = System.currentTimeMillis();
     private final AtomicReference<TimeoutIndicator> timeoutStatus = new AtomicReference<>(TimeoutIndicator.NONE);
 
     private ReservedSessionMessagesHandler reservedSessionMessagesHandler;
     private SessionDisconnectHandler sessionDisconnectHandler;
     private UnknownChannelReferenceHandler unknownChannelReferenceHandler;
-    private ChannelStreamPacketWriterResolver channelStreamPacketWriterResolver;
+    private ChannelStreamWriterResolver channelStreamPacketWriterResolver;
 
     /**
      * The name of the authenticated user
@@ -156,7 +160,7 @@ public abstract class SessionHelper extends AbstractKexFactoryManager implements
 
     @Override
     @SuppressWarnings("unchecked")
-    public <T> T getAttribute(AttributeRepository.AttributeKey<T> key) {
+    public <T> T getAttribute(AttributeKey<T> key) {
         return (T) attributes.get(Objects.requireNonNull(key, "No key"));
     }
 
@@ -168,21 +172,22 @@ public abstract class SessionHelper extends AbstractKexFactoryManager implements
     @Override
     @SuppressWarnings({ "unchecked", "rawtypes" })
     public <T> T computeAttributeIfAbsent(
-            AttributeRepository.AttributeKey<T> key, Function<? super AttributeRepository.AttributeKey<T>, ? extends T> resolver) {
+            AttributeKey<T> key,
+            Function<? super AttributeKey<T>, ? extends T> resolver) {
         return (T) attributes.computeIfAbsent(Objects.requireNonNull(key, "No key"), (Function) resolver);
     }
 
     @Override
     @SuppressWarnings("unchecked")
-    public <T> T setAttribute(AttributeRepository.AttributeKey<T> key, T value) {
+    public <T> T setAttribute(AttributeKey<T> key, T value) {
         return (T) attributes.put(
-            Objects.requireNonNull(key, "No key"),
-            Objects.requireNonNull(value, "No value"));
+                Objects.requireNonNull(key, "No key"),
+                Objects.requireNonNull(value, "No value"));
     }
 
     @Override
     @SuppressWarnings("unchecked")
-    public <T> T removeAttribute(AttributeRepository.AttributeKey<T> key) {
+    public <T> T removeAttribute(AttributeKey<T> key) {
         return (T) attributes.remove(Objects.requireNonNull(key, "No key"));
     }
 
@@ -209,37 +214,42 @@ public abstract class SessionHelper extends AbstractKexFactoryManager implements
     @Override
     public void setAuthenticated() throws IOException {
         this.authed = true;
-        signalSessionEvent(SessionListener.Event.Authenticated);
+        try {
+            signalSessionEvent(SessionListener.Event.Authenticated);
+        } catch (Exception e) {
+            GenericUtils.rethrowAsIoException(e);
+        }
     }
 
     /**
-     * Checks whether the session has timed out (both auth and idle timeouts are checked).
-     * If the session has timed out, a DISCONNECT message will be sent.
+     * Checks whether the session has timed out (both authentication and idle timeouts are checked). If the session has
+     * timed out, a DISCONNECT message will be sent.
      *
-     * @return An indication whether timeout has been detected
+     * @return             An indication whether timeout has been detected
      * @throws IOException If failed to check
-     * @see #checkAuthenticationTimeout(long, long)
-     * @see #checkIdleTimeout(long, long)
+     * @see                #checkAuthenticationTimeout(Instant, Duration)
+     * @see                #checkIdleTimeout(Instant, Duration)
      */
     protected TimeoutIndicator checkForTimeouts() throws IOException {
+        boolean debugEnabled = log.isDebugEnabled();
         if ((!isOpen()) || isClosing() || isClosed()) {
-            if (log.isDebugEnabled()) {
+            if (debugEnabled) {
                 log.debug("checkForTimeouts({}) session closing", this);
-                return TimeoutIndicator.NONE;
             }
+            return TimeoutIndicator.NONE;
         }
 
         // If already detected a timeout don't check again
         TimeoutIndicator result = timeoutStatus.get();
         TimeoutStatus status = (result == null) ? TimeoutStatus.NoTimeout : result.getStatus();
         if ((status != null) && (status != TimeoutStatus.NoTimeout)) {
-            if (log.isDebugEnabled()) {
+            if (debugEnabled) {
                 log.debug("checkForTimeouts({}) already detected {}", this, result);
             }
             return result;
         }
 
-        long now = System.currentTimeMillis();
+        Instant now = Instant.now();
         result = checkAuthenticationTimeout(now, getAuthTimeout());
         if (result == null) {
             result = checkIdleTimeout(now, getIdleTimeout());
@@ -256,19 +266,16 @@ public abstract class SessionHelper extends AbstractKexFactoryManager implements
             resetTimeout = (handler != null) && handler.handleTimeoutDisconnectReason(this, result);
         } catch (RuntimeException | IOException e) {
             // If disconnect handler throws an exception continue with the disconnect
-            log.warn("checkForTimeouts({}) failed ({}) to invoke disconnect handler to handle {}: {}",
-                this, e.getClass().getSimpleName(), result, e.getMessage());
-            if (log.isDebugEnabled()) {
-                log.debug("checkForTimeouts(" + this + ") disconnect handler exception details", e);
-            }
+            warn("checkForTimeouts({}) failed ({}) to invoke disconnect handler to handle {}: {}",
+                    this, e.getClass().getSimpleName(), result, e.getMessage(), e);
         }
 
         if (resetTimeout) {
-            if (log.isDebugEnabled()) {
+            if (debugEnabled) {
                 log.debug("checkForTimeouts({}) cancel {} due to handler intervention", this, result);
             }
 
-            switch(status) {
+            switch (status) {
                 case AuthTimeout:
                     resetAuthTimeout();
                     break;
@@ -276,80 +283,81 @@ public abstract class SessionHelper extends AbstractKexFactoryManager implements
                     resetIdleTimeout();
                     break;
 
-                default:    // ignored
+                default: // ignored
             }
 
             return TimeoutIndicator.NONE;
         }
 
-        if (log.isDebugEnabled()) {
+        if (debugEnabled) {
             log.debug("checkForTimeouts({}) disconnect - reason={}", this, result);
         }
 
         timeoutStatus.set(result);
 
         disconnect(SshConstants.SSH2_DISCONNECT_PROTOCOL_ERROR,
-            "Detected " + status + " after " + result.getExpiredValue() + "/" + result.getThresholdValue() + " ms.");
+                "Detected " + status + " after " + result.getExpiredValue()
+                                                                + "/" + result.getThresholdValue() + " ms.");
         return result;
     }
 
     @Override
-    public long getAuthTimeoutStart() {
-        return authTimeoutStart;
+    public Instant getAuthTimeoutStart() {
+        return authStart;
     }
 
     @Override
-    public long resetAuthTimeout() {
-        long value = getAuthTimeoutStart();
-        this.authTimeoutStart = System.currentTimeMillis();
+    public Instant resetAuthTimeout() {
+        Instant value = getAuthTimeoutStart();
+        this.authStart = Instant.now();
         return value;
     }
 
     /**
      * Checks if authentication timeout expired
      *
-     * @param now           The current time in millis
-     * @param authTimeoutMs The configured timeout in millis - if non-positive then no timeout
-     * @return A {@link TimeoutIndicator} specifying the timeout status and disconnect reason
-     * message if timeout expired, {@code null} or {@code NoTimeout} if no timeout occurred
-     * @see #getAuthTimeout()
+     * @param  now         The current time in millis
+     * @param  authTimeout The configured timeout - if non-positive then no timeout
+     * @return             A {@link TimeoutIndicator} specifying the timeout status and disconnect reason message if
+     *                     timeout expired, {@code null} or {@code NoTimeout} if no timeout occurred
+     * @see                #getAuthTimeout()
      */
-    protected TimeoutIndicator checkAuthenticationTimeout(long now, long authTimeoutMs) {
-        long authDiff = now - getAuthTimeoutStart();
-        if ((!isAuthenticated()) && (authTimeoutMs > 0L) && (authDiff > authTimeoutMs)) {
-            return new TimeoutIndicator(TimeoutStatus.AuthTimeout, authTimeoutMs, authDiff);
+    protected TimeoutIndicator checkAuthenticationTimeout(Instant now, Duration authTimeout) {
+        Duration d = Duration.between(authStart, now);
+        if ((!isAuthenticated()) && GenericUtils.isPositive(authTimeout) && (d.compareTo(authTimeout) > 0)) {
+            return new TimeoutIndicator(TimeoutStatus.AuthTimeout, authTimeout, d);
         } else {
             return null;
         }
     }
 
     @Override
-    public long getIdleTimeoutStart() {
-        return idleTimeoutStart;
+    public Instant getIdleTimeoutStart() {
+        return idleStart;
     }
 
     /**
      * Checks if idle timeout expired
      *
-     * @param now           The current time in millis
-     * @param idleTimeoutMs The configured timeout in millis - if non-positive then no timeout
-     * @return A {@link TimeoutIndicator} specifying the timeout status and disconnect reason
-     * message if timeout expired, {@code null} or {@code NoTimeout} if no timeout occurred
-     * @see #getIdleTimeout()
+     * @param  now         The current time in millis
+     * @param  idleTimeout The configured timeout - if non-positive then no timeout
+     * @return             A {@link TimeoutIndicator} specifying the timeout status and disconnect reason message if
+     *                     timeout expired, {@code null} or {@code NoTimeout} if no timeout occurred
+     * @see                #getIdleTimeout()
      */
-    protected TimeoutIndicator checkIdleTimeout(long now, long idleTimeoutMs) {
-        long idleDiff = now - getIdleTimeoutStart();
-        if ((idleTimeoutMs > 0L) && (idleDiff > idleTimeoutMs)) {
-            return new TimeoutIndicator(TimeoutStatus.IdleTimeout, idleTimeoutMs, idleDiff);
+    protected TimeoutIndicator checkIdleTimeout(Instant now, Duration idleTimeout) {
+        Duration d = Duration.between(idleStart, now);
+        if (isAuthenticated() && GenericUtils.isPositive(idleTimeout) && (d.compareTo(idleTimeout) > 0)) {
+            return new TimeoutIndicator(TimeoutStatus.IdleTimeout, idleTimeout, d);
         } else {
             return null;
         }
     }
 
     @Override
-    public long resetIdleTimeout() {
-        long value = getIdleTimeoutStart();
-        this.idleTimeoutStart = System.currentTimeMillis();
+    public Instant resetIdleTimeout() {
+        Instant value = getIdleTimeoutStart();
+        this.idleStart = Instant.now();
         return value;
     }
 
@@ -361,7 +369,7 @@ public abstract class SessionHelper extends AbstractKexFactoryManager implements
     @Override
     public ReservedSessionMessagesHandler getReservedSessionMessagesHandler() {
         return resolveEffectiveProvider(ReservedSessionMessagesHandler.class,
-            reservedSessionMessagesHandler, getFactoryManager().getReservedSessionMessagesHandler());
+                reservedSessionMessagesHandler, getFactoryManager().getReservedSessionMessagesHandler());
     }
 
     @Override
@@ -372,7 +380,7 @@ public abstract class SessionHelper extends AbstractKexFactoryManager implements
     @Override
     public SessionDisconnectHandler getSessionDisconnectHandler() {
         return resolveEffectiveProvider(SessionDisconnectHandler.class,
-            sessionDisconnectHandler, getFactoryManager().getSessionDisconnectHandler());
+                sessionDisconnectHandler, getFactoryManager().getSessionDisconnectHandler());
     }
 
     @Override
@@ -389,7 +397,19 @@ public abstract class SessionHelper extends AbstractKexFactoryManager implements
             return;
         }
         resetIdleTimeout();
+        doInvokeIgnoreMessageHandler(buffer);
+    }
 
+    /**
+     * Invoked by {@link #handleDebug(Buffer)} after validating that the buffer structure seems well-formed and also
+     * resetting the idle timeout. By default, retrieves the {@link #resolveReservedSessionMessagesHandler()
+     * ReservedSessionMessagesHandler} and invokes its
+     * {@link ReservedSessionMessagesHandler#handleIgnoreMessage(Session, Buffer) handleIgnoreMessage} method.
+     *
+     * @param  buffer    The input {@link Buffer}
+     * @throws Exception if failed to handle the message
+     */
+    protected void doInvokeIgnoreMessageHandler(Buffer buffer) throws Exception {
         ReservedSessionMessagesHandler handler = resolveReservedSessionMessagesHandler();
         handler.handleIgnoreMessage(this, buffer);
     }
@@ -397,8 +417,8 @@ public abstract class SessionHelper extends AbstractKexFactoryManager implements
     /**
      * Sends a {@code SSH_MSG_UNIMPLEMENTED} message
      *
-     * @param seqNoValue The referenced sequence number
-     * @return An {@link IoWriteFuture} that can be used to wait for packet write completion
+     * @param  seqNoValue  The referenced sequence number
+     * @return             An {@link IoWriteFuture} that can be used to wait for packet write completion
      * @throws IOException if an error occurred sending the packet
      */
     protected IoWriteFuture sendNotImplemented(long seqNoValue) throws IOException {
@@ -415,9 +435,20 @@ public abstract class SessionHelper extends AbstractKexFactoryManager implements
             return;
         }
         resetIdleTimeout();
+        doInvokeUnimplementedMessageHandler(SshConstants.SSH_MSG_UNIMPLEMENTED, buffer);
+    }
 
+    /**
+     * @param  cmd       The unimplemented command
+     * @param  buffer    The input {@link Buffer}
+     * @return           Result of invoking
+     *                   {@link ReservedSessionMessagesHandler#handleUnimplementedMessage(Session, int, Buffer)
+     *                   handleUnimplementedMessage}
+     * @throws Exception if failed to handle the message
+     */
+    protected boolean doInvokeUnimplementedMessageHandler(int cmd, Buffer buffer) throws Exception {
         ReservedSessionMessagesHandler handler = resolveReservedSessionMessagesHandler();
-        handler.handleUnimplementedMessage(this, SshConstants.SSH_MSG_UNIMPLEMENTED, buffer);
+        return handler.handleUnimplementedMessage(this, cmd, buffer);
     }
 
     @Override
@@ -426,7 +457,7 @@ public abstract class SessionHelper extends AbstractKexFactoryManager implements
         lang = (lang == null) ? "" : lang;
 
         Buffer buffer = createBuffer(SshConstants.SSH_MSG_DEBUG,
-            text.length() + lang.length() + Integer.SIZE /* a few extras */);
+                text.length() + lang.length() + Integer.SIZE /* a few extras */);
         buffer.putBoolean(display);
         buffer.putString(text);
         buffer.putString(lang);
@@ -441,8 +472,21 @@ public abstract class SessionHelper extends AbstractKexFactoryManager implements
             }
             return;
         }
-        resetIdleTimeout();
 
+        resetIdleTimeout();
+        doInvokeDebugMessageHandler(buffer);
+    }
+
+    /**
+     * Invoked by {@link #handleDebug(Buffer)} after validating that the buffer structure seems well-formed and also
+     * resetting the idle timeout. By default, retrieves the {@link #resolveReservedSessionMessagesHandler()
+     * ReservedSessionMessagesHandler} and invokes its
+     * {@link ReservedSessionMessagesHandler#handleDebugMessage(Session, Buffer) handleDebugMessage} method.
+     *
+     * @param  buffer    The input {@link Buffer}
+     * @throws Exception if failed to handle the message
+     */
+    protected void doInvokeDebugMessageHandler(Buffer buffer) throws Exception {
         ReservedSessionMessagesHandler handler = resolveReservedSessionMessagesHandler();
         handler.handleDebugMessage(this, buffer);
     }
@@ -474,24 +518,24 @@ public abstract class SessionHelper extends AbstractKexFactoryManager implements
     }
 
     @Override
-    public ChannelStreamPacketWriterResolver getChannelStreamPacketWriterResolver() {
+    public ChannelStreamWriterResolver getChannelStreamWriterResolver() {
         return channelStreamPacketWriterResolver;
     }
 
     @Override
-    public void setChannelStreamPacketWriterResolver(ChannelStreamPacketWriterResolver resolver) {
+    public void setChannelStreamWriterResolver(ChannelStreamWriterResolver resolver) {
         channelStreamPacketWriterResolver = resolver;
     }
 
     @Override
-    public ChannelStreamPacketWriterResolver resolveChannelStreamPacketWriterResolver() {
-        ChannelStreamPacketWriterResolver resolver = getChannelStreamPacketWriterResolver();
+    public ChannelStreamWriterResolver resolveChannelStreamWriterResolver() {
+        ChannelStreamWriterResolver resolver = getChannelStreamWriterResolver();
         if (resolver != null) {
             return resolver;
         }
 
-        ChannelStreamPacketWriterResolverManager manager = getFactoryManager();
-        return manager.resolveChannelStreamPacketWriterResolver();
+        ChannelStreamWriterResolverManager manager = getFactoryManager();
+        return manager.resolveChannelStreamWriterResolver();
     }
 
     @Override
@@ -502,10 +546,10 @@ public abstract class SessionHelper extends AbstractKexFactoryManager implements
         return writePacket(buffer);
     }
 
-    @SuppressWarnings("unchecked")
     @Override
     public IoWriteFuture writePacket(Buffer buffer, long timeout, TimeUnit unit) throws IOException {
         IoWriteFuture writeFuture = writePacket(buffer);
+        @SuppressWarnings("unchecked")
         DefaultSshFuture<IoWriteFuture> future = (DefaultSshFuture<IoWriteFuture>) writeFuture;
         FactoryManager factoryManager = getFactoryManager();
         ScheduledExecutorService executor = factoryManager.getScheduledExecutorService();
@@ -520,6 +564,31 @@ public abstract class SessionHelper extends AbstractKexFactoryManager implements
         return writeFuture;
     }
 
+    protected void signalSessionEstablished(IoSession ioSession) throws Exception {
+        try {
+            invokeSessionSignaller(l -> {
+                signalSessionEstablished(l);
+                return null;
+            });
+        } catch (Throwable err) {
+            Throwable e = GenericUtils.peelException(err);
+            debug("Failed ({}) to announce session={} established: {}",
+                    e.getClass().getSimpleName(), ioSession, e.getMessage(), e);
+            if (e instanceof Exception) {
+                throw (Exception) e;
+            } else {
+                throw new RuntimeSshException(e);
+            }
+        }
+    }
+
+    protected void signalSessionEstablished(SessionListener listener) {
+        if (listener == null) {
+            return;
+        }
+        listener.sessionEstablished(this);
+    }
+
     protected void signalSessionCreated(IoSession ioSession) throws Exception {
         try {
             invokeSessionSignaller(l -> {
@@ -528,13 +597,8 @@ public abstract class SessionHelper extends AbstractKexFactoryManager implements
             });
         } catch (Throwable err) {
             Throwable e = GenericUtils.peelException(err);
-            if (log.isDebugEnabled()) {
-                log.debug("Failed ({}) to announce session={} created: {}",
-                      e.getClass().getSimpleName(), ioSession, e.getMessage());
-            }
-            if (log.isTraceEnabled()) {
-                log.trace("Session=" + ioSession + " creation failure details", e);
-            }
+            debug("Failed ({}) to announce session={} created: {}",
+                    e.getClass().getSimpleName(), ioSession, e.getMessage(), e);
             if (e instanceof Exception) {
                 throw (Exception) e;
             } else {
@@ -550,6 +614,57 @@ public abstract class SessionHelper extends AbstractKexFactoryManager implements
         listener.sessionCreated(this);
     }
 
+    protected void signalSendIdentification(String version, List<String> extraLines) throws Exception {
+        try {
+            invokeSessionSignaller(l -> {
+                signalSendIdentification(l, version, extraLines);
+                return null;
+            });
+        } catch (Throwable err) {
+            Throwable e = GenericUtils.peelException(err);
+            if (e instanceof Exception) {
+                throw (Exception) e;
+            } else {
+                throw new RuntimeSshException(e);
+            }
+        }
+    }
+
+    protected void signalSendIdentification(SessionListener listener, String version, List<String> extraLines) {
+        if (listener == null) {
+            return;
+        }
+
+        listener.sessionPeerIdentificationSend(this, version, extraLines);
+    }
+
+    protected void signalReadPeerIdentificationLine(String line, List<String> extraLines) throws Exception {
+        try {
+            invokeSessionSignaller(l -> {
+                signalReadPeerIdentificationLine(l, line, extraLines);
+                return null;
+            });
+        } catch (Throwable err) {
+            Throwable e = GenericUtils.peelException(err);
+            debug("signalReadPeerIdentificationLine({}) Failed ({}) to announce peer={}: {}",
+                    this, e.getClass().getSimpleName(), line, e.getMessage(), e);
+            if (e instanceof Exception) {
+                throw (Exception) e;
+            } else {
+                throw new RuntimeSshException(e);
+            }
+        }
+    }
+
+    protected void signalReadPeerIdentificationLine(
+            SessionListener listener, String version, List<String> extraLines) {
+        if (listener == null) {
+            return;
+        }
+
+        listener.sessionPeerIdentificationLine(this, version, extraLines);
+    }
+
     protected void signalPeerIdentificationReceived(String version, List<String> extraLines) throws Exception {
         try {
             invokeSessionSignaller(l -> {
@@ -558,23 +673,18 @@ public abstract class SessionHelper extends AbstractKexFactoryManager implements
             });
         } catch (Throwable err) {
             Throwable e = GenericUtils.peelException(err);
-            if (log.isDebugEnabled()) {
-                log.debug("signalPeerIdentificationReceived({}) Failed ({}) to announce peer={}: {}",
-                    this, e.getClass().getSimpleName(), version, e.getMessage());
-            }
-            if (log.isTraceEnabled()) {
-                log.trace("signalPeerIdentificationReceived(" + this + ")[" + version + "] failure details", e);
-            }
+            debug("signalPeerIdentificationReceived({}) Failed ({}) to announce peer={}: {}",
+                    this, e.getClass().getSimpleName(), version, e.getMessage(), e);
             if (e instanceof Exception) {
                 throw (Exception) e;
             } else {
                 throw new RuntimeSshException(e);
             }
         }
-
     }
 
-    protected void signalPeerIdentificationReceived(SessionListener listener, String version, List<String> extraLines) {
+    protected void signalPeerIdentificationReceived(
+            SessionListener listener, String version, List<String> extraLines) {
         if (listener == null) {
             return;
         }
@@ -585,10 +695,10 @@ public abstract class SessionHelper extends AbstractKexFactoryManager implements
     /**
      * Sends a session event to all currently registered session listeners
      *
-     * @param event The event to send
-     * @throws IOException If any of the registered listeners threw an exception.
+     * @param  event     The event to send
+     * @throws Exception If any of the registered listeners threw an exception.
      */
-    protected void signalSessionEvent(SessionListener.Event event) throws IOException {
+    protected void signalSessionEvent(SessionListener.Event event) throws Exception {
         try {
             invokeSessionSignaller(l -> {
                 signalSessionEvent(l, event);
@@ -596,19 +706,12 @@ public abstract class SessionHelper extends AbstractKexFactoryManager implements
             });
         } catch (Throwable err) {
             Throwable t = GenericUtils.peelException(err);
-            if (log.isDebugEnabled()) {
-                log.debug("sendSessionEvent({})[{}] failed ({}) to inform listeners: {}",
-                       this, event, t.getClass().getSimpleName(), t.getMessage());
-            }
-            if (log.isTraceEnabled()) {
-                log.trace("sendSessionEvent(" + this + ")[" + event + "] listener inform details", t);
-            }
-            if (t instanceof IOException) {
-                throw (IOException) t;
-            } else if (t instanceof RuntimeException) {
-                throw (RuntimeException) t;
+            debug("sendSessionEvent({})[{}] failed ({}) to inform listeners: {}",
+                    this, event, t.getClass().getSimpleName(), t.getMessage(), t);
+            if (t instanceof Exception) {
+                throw (Exception) t;
             } else {
-                throw new IOException("Failed (" + t.getClass().getSimpleName() + ") to send session event: " + t.getMessage(), t);
+                throw new RuntimeSshException(t);
             }
         }
     }
@@ -624,8 +727,8 @@ public abstract class SessionHelper extends AbstractKexFactoryManager implements
     protected void invokeSessionSignaller(Invoker<SessionListener, Void> invoker) throws Throwable {
         FactoryManager manager = getFactoryManager();
         SessionListener[] listeners = {
-            (manager == null) ? null : manager.getSessionListenerProxy(),
-            getSessionListenerProxy()
+                (manager == null) ? null : manager.getSessionListenerProxy(),
+                getSessionListenerProxy()
         };
 
         Throwable err = null;
@@ -633,6 +736,7 @@ public abstract class SessionHelper extends AbstractKexFactoryManager implements
             if (l == null) {
                 continue;
             }
+
             try {
                 invoker.invoke(l);
             } catch (Throwable t) {
@@ -646,18 +750,20 @@ public abstract class SessionHelper extends AbstractKexFactoryManager implements
     }
 
     /**
-     * Method used while putting new keys into use that will resize the key used to
-     * initialize the cipher to the needed length.
+     * Method used while putting new keys into use that will resize the key used to initialize the cipher to the needed
+     * length.
      *
-     * @param e       the key to resize
-     * @param kdfSize the cipher key-derivation-factor (in bytes)
-     * @param hash    the hash algorithm
-     * @param k       the key exchange k parameter
-     * @param h       the key exchange h parameter
-     * @return the resized key
+     * @param  e         the key to resize
+     * @param  kdfSize   the cipher key-derivation-factor (in bytes)
+     * @param  hash      the hash algorithm
+     * @param  k         the key exchange k parameter
+     * @param  h         the key exchange h parameter
+     * @return           the resized key
      * @throws Exception if a problem occur while resizing the key
      */
-    protected byte[] resizeKey(byte[] e, int kdfSize, Digest hash, byte[] k, byte[] h) throws Exception {
+    protected byte[] resizeKey(
+            byte[] e, int kdfSize, Digest hash, byte[] k, byte[] h)
+            throws Exception {
         for (Buffer buffer = null; kdfSize > e.length; buffer = BufferUtils.clear(buffer)) {
             if (buffer == null) {
                 buffer = new ByteArrayBuffer();
@@ -667,20 +773,20 @@ public abstract class SessionHelper extends AbstractKexFactoryManager implements
             buffer.putRawBytes(h);
             buffer.putRawBytes(e);
             hash.update(buffer.array(), 0, buffer.available());
+
             byte[] foo = hash.digest();
             byte[] bar = new byte[e.length + foo.length];
             System.arraycopy(e, 0, bar, 0, e.length);
             System.arraycopy(foo, 0, bar, e.length, foo.length);
             e = bar;
         }
+
         return e;
     }
 
     /**
-     * @param knownAddress Any externally set peer address - e.g., due to some
-     * proxy mechanism meta-data
-     * @return The external address if not {@code null} otherwise, the {@code IoSession}
-     * peer address
+     * @param  knownAddress Any externally set peer address - e.g., due to some proxy mechanism meta-data
+     * @return              The external address if not {@code null} otherwise, the {@code IoSession} peer address
      */
     protected SocketAddress resolvePeerAddress(SocketAddress knownAddress) {
         if (knownAddress != null) {
@@ -710,15 +816,13 @@ public abstract class SessionHelper extends AbstractKexFactoryManager implements
     }
 
     /**
-     * Resolves the identification to send to the peer session by consulting
-     * the associated {@link FactoryManager}. If a value is set, then it is
-     * <U>appended</U> to the standard {@link SessionContext#DEFAULT_SSH_VERSION_PREFIX}.
-     * Otherwise a default value is returned consisting of the prefix and
-     * the core artifact name + version in <U>uppercase</U> - e.g.,'
-     * &quot;SSH-2.0-APACHE-SSHD-1.2.3.4&quot;
+     * Resolves the identification to send to the peer session by consulting the associated {@link FactoryManager}. If a
+     * value is set, then it is <U>appended</U> to the standard {@link SessionContext#DEFAULT_SSH_VERSION_PREFIX}.
+     * Otherwise a default value is returned consisting of the prefix and the core artifact name + version in
+     * <U>uppercase</U> - e.g.,' &quot;SSH-2.0-APACHE-SSHD-1.2.3.4&quot;
      *
-     * @param configPropName The property used to query the factory manager
-     * @return The resolved identification value
+     * @param  configPropName The property used to query the factory manager
+     * @return                The resolved identification value
      */
     protected String resolveIdentificationString(String configPropName) {
         FactoryManager manager = getFactoryManager();
@@ -729,43 +833,58 @@ public abstract class SessionHelper extends AbstractKexFactoryManager implements
     /**
      * Send our identification.
      *
-     * @param ident our identification to send
-     * @return {@link IoWriteFuture} that can be used to wait for notification
-     * that identification has been send
-     * @throws IOException If failed to send the packet
+     * @param  version    our identification to send
+     * @param  extraLines Extra lines to send - used only by server sessions
+     * @return            {@link IoWriteFuture} that can be used to wait for notification that identification has been
+     *                    send
+     * @throws Exception  If failed to send the packet
      */
-    protected IoWriteFuture sendIdentification(String ident) throws IOException {
-        byte[] data = (ident + "\r\n").getBytes(StandardCharsets.UTF_8);
-        if (log.isDebugEnabled()) {
-            log.debug("sendIdentification({}): {}", this, ident.replace('\r', '|').replace('\n', '|'));
+    protected IoWriteFuture sendIdentification(String version, List<String> extraLines) throws Exception {
+        ReservedSessionMessagesHandler handler = getReservedSessionMessagesHandler();
+        IoWriteFuture future = (handler == null) ? null : handler.sendIdentification(this, version, extraLines);
+        boolean debugEnabled = log.isDebugEnabled();
+        if (future != null) {
+            if (debugEnabled) {
+                log.debug("sendIdentification({})[{}] sent {} lines via reserved handler",
+                        this, version, GenericUtils.size(extraLines));
+            }
+
+            return future;
+        }
+
+        String ident = version;
+        if (GenericUtils.size(extraLines) > 0) {
+            ident = GenericUtils.join(extraLines, "\r\n") + "\r\n" + version;
+        }
+
+        if (debugEnabled) {
+            log.debug("sendIdentification({}): {}",
+                    this, ident.replace('\r', '|').replace('\n', '|'));
         }
 
         IoSession networkSession = getIoSession();
-        return networkSession.writePacket(new ByteArrayBuffer(data));
+        byte[] data = (ident + "\r\n").getBytes(StandardCharsets.UTF_8);
+        return networkSession.writeBuffer(new ByteArrayBuffer(data));
     }
 
     /**
-     * Read the remote identification from this buffer.
-     * If more data is needed, the buffer will be reset to its original state
-     * and a {@code null} value will be returned. Else the identification
-     * string will be returned and the data read will be consumed from the buffer.
+     * Read the remote identification from this buffer. If more data is needed, the buffer will be reset to its original
+     * state and a {@code null} value will be returned. Else the identification string will be returned and the data
+     * read will be consumed from the buffer.
      *
-     * @param buffer the buffer containing the identification string
-     * @param server {@code true} if it is called by the server session,
-     * {@code false} if by the client session
-     * @return A {@link List} of all received remote identification lines until
-     * the version line was read or {@code null} if more data is needed.
-     * The identification line is the <U>last</U> one in the list
-     * @throws IOException if malformed identification found
+     * @param  buffer    the buffer containing the identification string
+     * @param  server    {@code true} if it is called by the server session, {@code false} if by the client session
+     * @return           A {@link List} of all received remote identification lines until the version line was read or
+     *                   {@code null} if more data is needed. The identification line is the <U>last</U> one in the list
+     * @throws Exception if malformed identification found
      */
-    protected List<String> doReadIdentification(Buffer buffer, boolean server) throws IOException {
-        int maxIdentSize = PropertyResolverUtils.getIntProperty(this,
-            FactoryManager.MAX_IDENTIFICATION_SIZE, FactoryManager.DEFAULT_MAX_IDENTIFICATION_SIZE);
+    protected List<String> doReadIdentification(Buffer buffer, boolean server) throws Exception {
+        int maxIdentSize = CoreModuleProperties.MAX_IDENTIFICATION_SIZE.getRequired(this);
         List<String> ident = null;
         int rpos = buffer.rpos();
         boolean debugEnabled = log.isDebugEnabled();
         for (byte[] data = new byte[SessionContext.MAX_VERSION_LINE_LENGTH];;) {
-            int pos = 0;    // start accumulating line from scratch
+            int pos = 0; // start accumulating line from scratch
             for (boolean needLf = false;;) {
                 if (buffer.available() == 0) {
                     // Need more data, so undo reading and return null
@@ -777,12 +896,14 @@ public abstract class SessionHelper extends AbstractKexFactoryManager implements
                 /*
                  * According to RFC 4253 section 4.2:
                  *
-                 *      "The null character MUST NOT be sent"
+                 * "The null character MUST NOT be sent"
                  */
                 if (b == 0) {
-                    throw new StreamCorruptedException("Incorrect identification (null characters not allowed) - "
-                        + " at line " + (GenericUtils.size(ident) + 1) + " character #" + (pos + 1)
-                        + " after '" + new String(data, 0, pos, StandardCharsets.UTF_8) + "'");
+                    throw new StreamCorruptedException(
+                            "Incorrect identification (null characters not allowed) - "
+                                                       + " at line " + (GenericUtils.size(ident) + 1) + " character #"
+                                                       + (pos + 1)
+                                                       + " after '" + new String(data, 0, pos, StandardCharsets.UTF_8) + "'");
                 }
                 if (b == '\r') {
                     needLf = true;
@@ -794,15 +915,17 @@ public abstract class SessionHelper extends AbstractKexFactoryManager implements
                 }
 
                 if (needLf) {
-                    throw new StreamCorruptedException("Incorrect identification (bad line ending) "
-                        + " at line " + (GenericUtils.size(ident) + 1)
-                        + ": " + new String(data, 0, pos, StandardCharsets.UTF_8));
+                    throw new StreamCorruptedException(
+                            "Incorrect identification (bad line ending) "
+                                                       + " at line " + (GenericUtils.size(ident) + 1)
+                                                       + ": " + new String(data, 0, pos, StandardCharsets.UTF_8));
                 }
 
                 if (pos >= data.length) {
-                    throw new StreamCorruptedException("Incorrect identification (line too long): "
-                        + " at line " + (GenericUtils.size(ident) + 1)
-                        + ": " + new String(data, 0, pos, StandardCharsets.UTF_8));
+                    throw new StreamCorruptedException(
+                            "Incorrect identification (line too long): "
+                                                       + " at line " + (GenericUtils.size(ident) + 1)
+                                                       + ": " + new String(data, 0, pos, StandardCharsets.UTF_8));
                 }
 
                 data[pos++] = b;
@@ -816,6 +939,8 @@ public abstract class SessionHelper extends AbstractKexFactoryManager implements
             if (ident == null) {
                 ident = new ArrayList<>();
             }
+
+            signalReadPeerIdentificationLine(str, ident);
             ident.add(str);
 
             // if this is a server then only one line is expected from the client
@@ -831,15 +956,15 @@ public abstract class SessionHelper extends AbstractKexFactoryManager implements
 
     protected String resolveSessionKexProposal(String hostKeyTypes) throws IOException {
         return NamedResource.getNames(
-            ValidateUtils.checkNotNullAndNotEmpty(getKeyExchangeFactories(), "No KEX factories"));
+                ValidateUtils.checkNotNullAndNotEmpty(getKeyExchangeFactories(), "No KEX factories"));
     }
 
     /**
      * Create our proposal for SSH negotiation
      *
-     * @param hostKeyTypes The comma-separated list of supported host key types
-     * @return The proposal {@link Map}
-     * @throws IOException If internal problem - e.g., KEX extensions negotiation issue
+     * @param  hostKeyTypes The comma-separated list of supported host key types
+     * @return              The proposal {@link Map}
+     * @throws IOException  If internal problem - e.g., KEX extensions negotiation issue
      */
     protected Map<KexProposalOption, String> createProposal(String hostKeyTypes) throws IOException {
         Map<KexProposalOption, String> proposal = new EnumMap<>(KexProposalOption.class);
@@ -848,22 +973,22 @@ public abstract class SessionHelper extends AbstractKexFactoryManager implements
         proposal.put(KexProposalOption.SERVERKEYS, hostKeyTypes);
 
         String ciphers = NamedResource.getNames(
-            ValidateUtils.checkNotNullAndNotEmpty(getCipherFactories(), "No cipher factories"));
+                ValidateUtils.checkNotNullAndNotEmpty(getCipherFactories(), "No cipher factories"));
         proposal.put(KexProposalOption.S2CENC, ciphers);
         proposal.put(KexProposalOption.C2SENC, ciphers);
 
         String macs = NamedResource.getNames(
-            ValidateUtils.checkNotNullAndNotEmpty(getMacFactories(), "No MAC factories"));
+                ValidateUtils.checkNotNullAndNotEmpty(getMacFactories(), "No MAC factories"));
         proposal.put(KexProposalOption.S2CMAC, macs);
         proposal.put(KexProposalOption.C2SMAC, macs);
 
         String compressions = NamedResource.getNames(
-            ValidateUtils.checkNotNullAndNotEmpty(getCompressionFactories(), "No compression factories"));
+                ValidateUtils.checkNotNullAndNotEmpty(getCompressionFactories(), "No compression factories"));
         proposal.put(KexProposalOption.S2CCOMP, compressions);
         proposal.put(KexProposalOption.C2SCOMP, compressions);
 
-        proposal.put(KexProposalOption.S2CLANG, "");    // TODO allow configuration
-        proposal.put(KexProposalOption.C2SLANG, "");    // TODO allow configuration
+        proposal.put(KexProposalOption.S2CLANG, ""); // TODO allow configuration
+        proposal.put(KexProposalOption.C2SLANG, ""); // TODO allow configuration
         return proposal;
     }
 
@@ -877,7 +1002,7 @@ public abstract class SessionHelper extends AbstractKexFactoryManager implements
 
         synchronized (current) {
             if (!current.isEmpty()) {
-                current.clear();    // debug breakpoint
+                current.clear(); // debug breakpoint
             }
 
             if (GenericUtils.isEmpty(proposal)) {
@@ -890,13 +1015,41 @@ public abstract class SessionHelper extends AbstractKexFactoryManager implements
         return proposal;
     }
 
-    protected void signalNegotiationStart(Map<KexProposalOption, String> c2sOptions, Map<KexProposalOption, String> s2cOptions) {
+    protected void signalNegotiationOptionsCreated(Map<KexProposalOption, String> proposal) {
+        try {
+            invokeSessionSignaller(l -> {
+                signalNegotiationOptionsCreated(l, proposal);
+                return null;
+            });
+        } catch (Throwable t) {
+            Throwable err = GenericUtils.peelException(t);
+            if (err instanceof RuntimeException) {
+                throw (RuntimeException) err;
+            } else if (err instanceof Error) {
+                throw (Error) err;
+            } else {
+                throw new RuntimeException(err);
+            }
+        }
+    }
+
+    protected void signalNegotiationOptionsCreated(SessionListener listener, Map<KexProposalOption, String> proposal) {
+        if (listener == null) {
+            return;
+        }
+
+        listener.sessionNegotiationOptionsCreated(this, proposal);
+    }
+
+    protected void signalNegotiationStart(
+            Map<KexProposalOption, String> c2sOptions, Map<KexProposalOption, String> s2cOptions) {
         try {
             invokeSessionSignaller(l -> {
                 signalNegotiationStart(l, c2sOptions, s2cOptions);
                 return null;
             });
-        } catch (Throwable err) {
+        } catch (Throwable t) {
+            Throwable err = GenericUtils.peelException(t);
             if (err instanceof RuntimeException) {
                 throw (RuntimeException) err;
             } else if (err instanceof Error) {
@@ -924,7 +1077,8 @@ public abstract class SessionHelper extends AbstractKexFactoryManager implements
                 signalNegotiationEnd(l, c2sOptions, s2cOptions, negotiatedGuess, reason);
                 return null;
             });
-        } catch (Throwable err) {
+        } catch (Throwable t) {
+            Throwable err = GenericUtils.peelException(t);
             if (err instanceof RuntimeException) {
                 throw (RuntimeException) err;
             } else if (err instanceof Error) {
@@ -935,7 +1089,8 @@ public abstract class SessionHelper extends AbstractKexFactoryManager implements
         }
     }
 
-    protected void signalNegotiationEnd(SessionListener listener,
+    protected void signalNegotiationEnd(
+            SessionListener listener,
             Map<KexProposalOption, String> c2sOptions, Map<KexProposalOption, String> s2cOptions,
             Map<KexProposalOption, String> negotiatedGuess, Throwable reason) {
         if (listener == null) {
@@ -945,10 +1100,40 @@ public abstract class SessionHelper extends AbstractKexFactoryManager implements
         listener.sessionNegotiationEnd(this, c2sOptions, s2cOptions, negotiatedGuess, null);
     }
 
+    /**
+     * Invoked by the session before encoding the buffer in order to make sure that it is at least of size
+     * {@link SshConstants#SSH_PACKET_HEADER_LEN SSH_PACKET_HEADER_LEN}. This is required in order to efficiently handle
+     * the encoding. If necessary, it re-allocates a new buffer and returns it instead.
+     *
+     * @param  cmd         The command stored in the buffer
+     * @param  buffer      The original {@link Buffer} - assumed to be properly formatted and be of at least the
+     *                     required minimum length.
+     * @return             The adjusted {@link Buffer}. <B>Note:</B> users may use this method to totally alter the
+     *                     contents of the buffer being sent but it is highly discouraged as it may have unexpected
+     *                     results.
+     * @throws IOException If failed to process the buffer
+     */
+    protected Buffer preProcessEncodeBuffer(int cmd, Buffer buffer) throws IOException {
+        int curPos = buffer.rpos();
+        if (curPos >= SshConstants.SSH_PACKET_HEADER_LEN) {
+            return buffer;
+        }
+
+        log.warn("preProcessEncodeBuffer({}) command={}[{}] performance cost:"
+                 + " available buffer packet header length ({}) below min. required ({})",
+                this, cmd, SshConstants.getCommandMessageName(cmd),
+                curPos, SshConstants.SSH_PACKET_HEADER_LEN);
+        Buffer nb = new ByteArrayBuffer(buffer.available() + Long.SIZE, false);
+        nb.wpos(SshConstants.SSH_PACKET_HEADER_LEN);
+        nb.putBuffer(buffer);
+        return nb;
+    }
+
     @Override
     public void disconnect(int reason, String msg) throws IOException {
-        log.info("Disconnecting({}): {} - {}", this, SshConstants.getDisconnectReasonName(reason), msg);
-        String languageTag = "";    // TODO configure language...
+        log.info("Disconnecting({}): {} - {}",
+                this, SshConstants.getDisconnectReasonName(reason), msg);
+        String languageTag = ""; // TODO configure language...
         signalDisconnect(reason, msg, languageTag, true);
 
         Buffer buffer = createBuffer(SshConstants.SSH_MSG_DISCONNECT, msg.length() + Short.SIZE);
@@ -958,27 +1143,21 @@ public abstract class SessionHelper extends AbstractKexFactoryManager implements
 
         // Write the packet with a timeout to ensure a timely close of the session
         // in case the consumer does not read packets anymore.
-        long disconnectTimeoutMs = this.getLongProperty(
-            FactoryManager.DISCONNECT_TIMEOUT, FactoryManager.DEFAULT_DISCONNECT_TIMEOUT);
-        IoWriteFuture packetFuture = writePacket(buffer, disconnectTimeoutMs, TimeUnit.MILLISECONDS);
+        Duration disconnectTimeout = CoreModuleProperties.DISCONNECT_TIMEOUT.getRequired(this);
+        IoWriteFuture packetFuture = writePacket(buffer, disconnectTimeout);
         packetFuture.addListener(future -> {
             Throwable t = future.getException();
-            if (log.isDebugEnabled()) {
-                if (t == null) {
+            boolean debugEnabled = log.isDebugEnabled();
+            if (t == null) {
+                if (debugEnabled) {
                     log.debug("disconnect({}) operation successfully completed for reason={} [{}]",
-                        SessionHelper.this, SshConstants.getDisconnectReasonName(reason), msg);
-                } else {
-                    log.debug("disconnect({}) operation failed ({}) for reason={} [{}]: {}",
-                        SessionHelper.this, t.getClass().getSimpleName(),
-                        SshConstants.getDisconnectReasonName(reason), msg, t.getMessage());
+                            SessionHelper.this, SshConstants.getDisconnectReasonName(reason), msg);
                 }
-            }
-
-            if (t != null) {
-                if (log.isTraceEnabled()) {
-                    log.trace("disconnect(" + SessionHelper.this + ")"
-                        + " reason=" + SshConstants.getDisconnectReasonName(reason) + " failure details",
-                        t);
+            } else {
+                if (debugEnabled) {
+                    debug("disconnect({}) operation failed ({}) for reason={} [{}]: {}",
+                            SessionHelper.this, t.getClass().getSimpleName(),
+                            SshConstants.getDisconnectReasonName(reason), msg, t.getMessage(), t);
                 }
             }
 
@@ -986,7 +1165,7 @@ public abstract class SessionHelper extends AbstractKexFactoryManager implements
         });
     }
 
-    protected void handleDisconnect(Buffer buffer) throws Exception  {
+    protected void handleDisconnect(Buffer buffer) throws Exception {
         int code = buffer.getInt();
         String message = buffer.getString();
         String languageTag;
@@ -1003,7 +1182,7 @@ public abstract class SessionHelper extends AbstractKexFactoryManager implements
     protected void handleDisconnect(int code, String msg, String lang, Buffer buffer) throws Exception {
         if (log.isDebugEnabled()) {
             log.debug("handleDisconnect({}) SSH_MSG_DISCONNECT reason={}, [lang={}] msg={}",
-                  this, SshConstants.getDisconnectReasonName(code), lang, msg);
+                    this, SshConstants.getDisconnectReasonName(code), lang, msg);
         }
 
         signalDisconnect(code, msg, lang, false);
@@ -1018,18 +1197,8 @@ public abstract class SessionHelper extends AbstractKexFactoryManager implements
             });
         } catch (Throwable err) {
             Throwable e = GenericUtils.peelException(err);
-            if (log.isDebugEnabled()) {
-                log.debug("signalDisconnect(" + this + ") signal session disconnect details", e);
-            }
-
-            if (log.isTraceEnabled()) {
-                Throwable[] suppressed = e.getSuppressed();
-                if (GenericUtils.length(suppressed) > 0) {
-                    for (Throwable s : suppressed) {
-                        log.trace("signalDisconnect(" + this + ") suppressed session disconnect signalling", s);
-                    }
-                }
-            }
+            debug("signalDisconnect({}) {}: {}",
+                    this, e.getClass().getSimpleName(), e.getMessage(), e);
         }
     }
 
@@ -1043,8 +1212,7 @@ public abstract class SessionHelper extends AbstractKexFactoryManager implements
     }
 
     /**
-     * Handle any exceptions that occurred on this session.
-     * The session will be closed and a disconnect packet will be
+     * Handle any exceptions that occurred on this session. The session will be closed and a disconnect packet will be
      * sent before if the given exception is an {@link SshException}.
      *
      * @param t the exception to process
@@ -1054,33 +1222,13 @@ public abstract class SessionHelper extends AbstractKexFactoryManager implements
         State curState = state.get();
         // Ignore exceptions that happen while closing immediately
         if ((!State.Opened.equals(curState)) && (!State.Graceful.equals(curState))) {
-            if (log.isDebugEnabled()) {
-                log.debug("exceptionCaught({}) ignore {} due to state={}, message='{}'",
-                      this, t.getClass().getSimpleName(), curState, t.getMessage());
-            }
-            if (log.isTraceEnabled()) {
-                log.trace("exceptionCaught(" + this + ")[state=" + curState + "] ignored exception details", t);
-            }
+            debug("exceptionCaught({}) ignore {} due to state={}, message='{}'",
+                    this, t.getClass().getSimpleName(), curState, t.getMessage(), t);
             return;
         }
 
-        log.warn("exceptionCaught({})[state={}] {}: {}",
-            this, curState, t.getClass().getSimpleName(), t.getMessage());
-        Throwable cause = t.getCause();
-        if ((cause != null) && GenericUtils.isSameReference(t, cause)) {
-            cause = null;
-        }
-        if (cause != null) {
-            log.warn("exceptionCaught({})[state={}] caused by {}: {}",
-                this, curState, cause.getClass().getSimpleName(), cause.getMessage());
-        }
-
-        if (log.isDebugEnabled()) {
-            log.debug("exceptionCaught(" + this + ")[state=" + curState + "] details", t);
-            if (cause != null) {
-                log.debug("exceptionCaught(" + this + ")[state=" + curState + "] cause", cause);
-            }
-        }
+        warn("exceptionCaught({})[state={}] {}: {}",
+                this, curState, t.getClass().getSimpleName(), t.getMessage(), t);
 
         signalExceptionCaught(t);
 
@@ -1090,13 +1238,9 @@ public abstract class SessionHelper extends AbstractKexFactoryManager implements
                 try {
                     disconnect(code, t.getMessage());
                 } catch (Throwable t2) {
-                    if (log.isDebugEnabled()) {
-                        log.debug("exceptionCaught({}) {} while disconnect with code={}: {}",
-                              this, t2.getClass().getSimpleName(), SshConstants.getDisconnectReasonName(code), t2.getMessage());
-                    }
-                    if (log.isTraceEnabled()) {
-                        log.trace("exceptionCaught(" + this + ")[code=" + SshConstants.getDisconnectReasonName(code) + "] disconnect exception details", t2);
-                    }
+                    debug("exceptionCaught({}) {} while disconnect with code={}: {}",
+                            this, t2.getClass().getSimpleName(), SshConstants.getDisconnectReasonName(code), t2.getMessage(),
+                            t2);
                 }
                 return;
             }
@@ -1113,18 +1257,8 @@ public abstract class SessionHelper extends AbstractKexFactoryManager implements
             });
         } catch (Throwable err) {
             Throwable e = GenericUtils.peelException(err);
-            if (log.isDebugEnabled()) {
-                log.debug("signalExceptionCaught(" + this + ") signal session exception details", e);
-            }
-
-            if (log.isTraceEnabled()) {
-                Throwable[] suppressed = e.getSuppressed();
-                if (GenericUtils.length(suppressed) > 0) {
-                    for (Throwable s : suppressed) {
-                        log.trace("signalExceptionCaught(" + this + ") suppressed session exception signalling", s);
-                    }
-                }
-            }
+            debug("signalExceptionCaught({}) {}: {}",
+                    this, e.getClass().getSimpleName(), e.getMessage(), e);
         }
     }
 
@@ -1144,20 +1278,9 @@ public abstract class SessionHelper extends AbstractKexFactoryManager implements
             });
         } catch (Throwable err) {
             Throwable e = GenericUtils.peelException(err);
-            log.warn("signalSessionClosed({}) {} while signal session closed: {}",
-                this, e.getClass().getSimpleName(), e.getMessage());
-            if (log.isDebugEnabled()) {
-                log.debug("signalSessionClosed(" + this + ") signal session closed exception details", e);
-            }
-
-            if (log.isTraceEnabled()) {
-                Throwable[] suppressed = e.getSuppressed();
-                if (GenericUtils.length(suppressed) > 0) {
-                    for (Throwable s : suppressed) {
-                        log.trace("signalSessionClosed(" + this + ") suppressed session closed signalling", s);
-                    }
-                }
-            }
+            debug("signalSessionClosed({}) {} while signal session closed: {}",
+                    this, e.getClass().getSimpleName(), e.getMessage(), e);
+            // Do not re-throw since session closed anyway
         }
     }
 
@@ -1171,67 +1294,67 @@ public abstract class SessionHelper extends AbstractKexFactoryManager implements
 
     protected abstract ConnectionService getConnectionService();
 
-    protected ForwardingFilter getForwardingFilter() {
+    protected Forwarder getForwarder() {
         ConnectionService service = getConnectionService();
-        return (service == null) ? null : service.getForwardingFilter();
+        return (service == null) ? null : service.getForwarder();
     }
 
     @Override
-    public List<Map.Entry<Integer, SshdSocketAddress>> getLocalForwardsBindings() {
-        ForwardingFilter filter = getForwardingFilter();
-        return (filter == null) ? Collections.emptyList() : filter.getLocalForwardsBindings();
+    public List<Map.Entry<SshdSocketAddress, SshdSocketAddress>> getLocalForwardsBindings() {
+        Forwarder forwarder = getForwarder();
+        return (forwarder == null) ? Collections.emptyList() : forwarder.getLocalForwardsBindings();
     }
 
     @Override
     public boolean isLocalPortForwardingStartedForPort(int port) {
-        ForwardingFilter filter = getForwardingFilter();
-        return (filter != null) && filter.isLocalPortForwardingStartedForPort(port);
+        Forwarder forwarder = getForwarder();
+        return (forwarder != null) && forwarder.isLocalPortForwardingStartedForPort(port);
     }
 
     @Override
-    public NavigableSet<Integer> getStartedLocalPortForwards() {
-        ForwardingFilter filter = getForwardingFilter();
-        return (filter == null) ? Collections.emptyNavigableSet() : filter.getStartedLocalPortForwards();
+    public List<SshdSocketAddress> getStartedLocalPortForwards() {
+        Forwarder forwarder = getForwarder();
+        return (forwarder == null) ? Collections.emptyList() : forwarder.getStartedLocalPortForwards();
     }
 
     @Override
-    public SshdSocketAddress getBoundLocalPortForward(int port) {
-        ForwardingFilter filter = getForwardingFilter();
-        return (filter == null) ? null : filter.getBoundLocalPortForward(port);
+    public List<SshdSocketAddress> getBoundLocalPortForwards(int port) {
+        Forwarder forwarder = getForwarder();
+        return (forwarder == null) ? Collections.emptyList() : forwarder.getBoundLocalPortForwards(port);
     }
 
     @Override
     public List<Map.Entry<Integer, SshdSocketAddress>> getRemoteForwardsBindings() {
-        ForwardingFilter filter = getForwardingFilter();
-        return (filter == null) ? Collections.emptyList() : filter.getRemoteForwardsBindings();
+        Forwarder forwarder = getForwarder();
+        return (forwarder == null) ? Collections.emptyList() : forwarder.getRemoteForwardsBindings();
     }
 
     @Override
     public boolean isRemotePortForwardingStartedForPort(int port) {
-        ForwardingFilter filter = getForwardingFilter();
-        return (filter != null) && filter.isRemotePortForwardingStartedForPort(port);
+        Forwarder forwarder = getForwarder();
+        return (forwarder != null) && forwarder.isRemotePortForwardingStartedForPort(port);
     }
 
     @Override
     public NavigableSet<Integer> getStartedRemotePortForwards() {
-        ForwardingFilter filter = getForwardingFilter();
-        return (filter == null) ? Collections.emptyNavigableSet() : filter.getStartedRemotePortForwards();
+        Forwarder forwarder = getForwarder();
+        return (forwarder == null) ? Collections.emptyNavigableSet() : forwarder.getStartedRemotePortForwards();
     }
 
     @Override
     public SshdSocketAddress getBoundRemotePortForward(int port) {
-        ForwardingFilter filter = getForwardingFilter();
-        return (filter == null) ? null : filter.getBoundRemotePortForward(port);
+        Forwarder forwarder = getForwarder();
+        return (forwarder == null) ? null : forwarder.getBoundRemotePortForward(port);
     }
 
     @Override
-    public long getAuthTimeout() {
-        return this.getLongProperty(FactoryManager.AUTH_TIMEOUT, FactoryManager.DEFAULT_AUTH_TIMEOUT);
+    public Duration getAuthTimeout() {
+        return CoreModuleProperties.AUTH_TIMEOUT.getRequired(this);
     }
 
     @Override
-    public long getIdleTimeout() {
-        return this.getLongProperty(FactoryManager.IDLE_TIMEOUT, FactoryManager.DEFAULT_IDLE_TIMEOUT);
+    public Duration getIdleTimeout() {
+        return CoreModuleProperties.IDLE_TIMEOUT.getRequired(this);
     }
 
     @Override

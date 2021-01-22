@@ -48,21 +48,22 @@ import org.apache.sshd.common.util.net.SshdSocketAddress;
 public class UserAuthHostBased extends AbstractUserAuth implements SignatureFactoriesManager {
     public static final String NAME = UserAuthHostBasedFactory.NAME;
 
-    private Iterator<? extends Map.Entry<KeyPair, ? extends Collection<X509Certificate>>> keys;
-    private final HostKeyIdentityProvider clientHostKeys;
+    protected Iterator<? extends Map.Entry<KeyPair, ? extends Collection<X509Certificate>>> keys;
+    protected Map.Entry<KeyPair, ? extends Collection<X509Certificate>> keyInfo;
+    protected final HostKeyIdentityProvider clientHostKeys;
     private List<NamedFactory<Signature>> factories;
     private String clientUsername;
     private String clientHostname;
 
     public UserAuthHostBased(HostKeyIdentityProvider clientHostKeys) {
         super(NAME);
-        this.clientHostKeys = clientHostKeys;   // OK if null
+        this.clientHostKeys = clientHostKeys; // OK if null
     }
 
     @Override
     public void init(ClientSession session, String service) throws Exception {
         super.init(session, service);
-        keys = HostKeyIdentityProvider.iteratorOf(clientHostKeys);  // in case multiple calls to the method
+        keys = HostKeyIdentityProvider.iteratorOf(clientHostKeys); // in case multiple calls to the method
     }
 
     @Override
@@ -95,25 +96,31 @@ public class UserAuthHostBased extends AbstractUserAuth implements SignatureFact
     protected boolean sendAuthDataRequest(ClientSession session, String service) throws Exception {
         String name = getName();
         boolean debugEnabled = log.isDebugEnabled();
-        if ((keys == null) || (!keys.hasNext())) {
+        String clientUsername = resolveClientUsername(session);
+        String clientHostname = resolveClientHostname(session);
+        HostBasedAuthenticationReporter reporter = session.getHostBasedAuthenticationReporter();
+        keyInfo = ((keys != null) && keys.hasNext()) ? keys.next() : null;
+        if (keyInfo == null) {
             if (debugEnabled) {
                 log.debug("sendAuthDataRequest({})[{}][{}] no more keys to send", session, service, name);
+            }
+
+            if (reporter != null) {
+                reporter.signalAuthenticationExhausted(session, service, clientUsername, clientHostname);
             }
 
             return false;
         }
 
-        Map.Entry<KeyPair, ? extends Collection<X509Certificate>> keyInfo = keys.next();
         KeyPair kp = keyInfo.getKey();
         PublicKey pub = kp.getPublic();
         String keyType = KeyUtils.getKeyType(pub);
         if (log.isTraceEnabled()) {
             log.trace("sendAuthDataRequest({})[{}][{}] current key details: type={}, fingerprint={}",
-                      session, service, name, keyType, KeyUtils.getFingerPrint(pub));
+                    session, service, name, keyType, KeyUtils.getFingerPrint(pub));
         }
 
-        Collection<NamedFactory<Signature>> factories =
-            ValidateUtils.checkNotNullAndNotEmpty(
+        Collection<NamedFactory<Signature>> factories = ValidateUtils.checkNotNullAndNotEmpty(
                 SignatureFactoriesManager.resolveSignatureFactories(this, session),
                 "No signature factories for session=%s",
                 session);
@@ -124,16 +131,17 @@ public class UserAuthHostBased extends AbstractUserAuth implements SignatureFact
 
         byte[] id = session.getSessionId();
         String username = session.getUsername();
-        String clientUsername = resolveClientUsername();
-        String clientHostname = resolveClientHostname();
         if (debugEnabled) {
             log.debug("sendAuthDataRequest({})[{}][{}] client={}@{}",
-                      session, service, name, clientUsername, clientHostname);
+                    session, service, name, clientUsername, clientHostname);
         }
 
         Buffer buffer = session.createBuffer(SshConstants.SSH_MSG_USERAUTH_REQUEST,
-                id.length + username.length() + service.length() + clientUsername.length() + clientHostname.length()
-              + keyType.length() + ByteArrayBuffer.DEFAULT_SIZE + Long.SIZE);
+                id.length + username.length() + service.length()
+                                                                                    + clientUsername.length()
+                                                                                    + clientHostname.length()
+                                                                                    + keyType.length()
+                                                                                    + ByteArrayBuffer.DEFAULT_SIZE + Long.SIZE);
         buffer.clear();
 
         buffer.putRawPublicKey(pub);
@@ -145,10 +153,11 @@ public class UserAuthHostBased extends AbstractUserAuth implements SignatureFact
                 buffer.putRawBytes(c.getEncoded());
             }
         }
-        verifier.initSigner(kp.getPrivate());
+        verifier.initSigner(session, kp.getPrivate());
 
         byte[] keyBytes = buffer.getCompactData();
-        buffer = session.prepareBuffer(SshConstants.SSH_MSG_USERAUTH_REQUEST, BufferUtils.clear(buffer));
+        buffer = session.prepareBuffer(
+                SshConstants.SSH_MSG_USERAUTH_REQUEST, BufferUtils.clear(buffer));
         buffer.putString(username);
         buffer.putString(service);
         buffer.putString(name);
@@ -156,25 +165,35 @@ public class UserAuthHostBased extends AbstractUserAuth implements SignatureFact
         buffer.putBytes(keyBytes);
         buffer.putString(clientHostname);
         buffer.putString(clientUsername);
-        appendSignature(session, service, keyType, pub, keyBytes, clientHostname, clientUsername, verifier, buffer);
+
+        byte[] signature = appendSignature(
+                session, service, keyType, pub, keyBytes,
+                clientHostname, clientUsername, verifier, buffer);
+        if (reporter != null) {
+            reporter.signalAuthenticationAttempt(
+                    session, service, kp, clientHostname, clientUsername, signature);
+        }
+
         session.writePacket(buffer);
         return true;
     }
 
     @SuppressWarnings("checkstyle:ParameterNumber")
-    protected void appendSignature(
+    protected byte[] appendSignature(
             ClientSession session, String service,
             String keyType, PublicKey key, byte[] keyBytes,
             String clientHostname, String clientUsername,
             Signature verifier, Buffer buffer)
-                throws Exception {
+            throws Exception {
         byte[] id = session.getSessionId();
         String username = session.getUsername();
         String name = getName();
-        Buffer bs = new ByteArrayBuffer(id.length + username.length() + service.length() + name.length()
-            + keyType.length() + keyBytes.length
-            + clientHostname.length() + clientUsername.length()
-            + ByteArrayBuffer.DEFAULT_SIZE + Long.SIZE, false);
+        Buffer bs = new ByteArrayBuffer(
+                id.length + username.length() + service.length() + name.length()
+                                        + keyType.length() + keyBytes.length
+                                        + clientHostname.length() + clientUsername.length()
+                                        + ByteArrayBuffer.DEFAULT_SIZE + Long.SIZE,
+                false);
         bs.putBytes(id);
         bs.putByte(SshConstants.SSH_MSG_USERAUTH_REQUEST);
         bs.putString(username);
@@ -185,12 +204,12 @@ public class UserAuthHostBased extends AbstractUserAuth implements SignatureFact
         bs.putString(clientHostname);
         bs.putString(clientUsername);
 
-        verifier.update(bs.array(), bs.rpos(), bs.available());
-        byte[] signature = verifier.sign();
+        verifier.update(session, bs.array(), bs.rpos(), bs.available());
+        byte[] signature = verifier.sign(session);
         if (log.isTraceEnabled()) {
             log.trace("appendSignature({})[{}][{}] type={}, fingerprint={}, client={}@{}: signature={}",
-                      session, service, name, keyType, KeyUtils.getFingerPrint(key),
-                      clientUsername, clientHostname, BufferUtils.toHex(signature));
+                    session, service, name, keyType, KeyUtils.getFingerPrint(key),
+                    clientUsername, clientHostname, BufferUtils.toHex(signature));
         }
 
         bs.clear();
@@ -198,24 +217,52 @@ public class UserAuthHostBased extends AbstractUserAuth implements SignatureFact
         bs.putString(keyType);
         bs.putBytes(signature);
         buffer.putBytes(bs.array(), bs.rpos(), bs.available());
+        return signature;
     }
 
     @Override
-    protected boolean processAuthDataRequest(ClientSession session, String service, Buffer buffer) throws Exception {
+    protected boolean processAuthDataRequest(
+            ClientSession session, String service, Buffer buffer)
+            throws Exception {
         int cmd = buffer.getUByte();
-        throw new IllegalStateException("processAuthDataRequest(" + session + ")[" + service + "]"
-                    + " received unknown packet: cmd=" + SshConstants.getCommandMessageName(cmd));
+        throw new IllegalStateException(
+                "processAuthDataRequest(" + session + ")[" + service + "]"
+                                        + " received unknown packet: cmd=" + SshConstants.getCommandMessageName(cmd));
     }
 
-    protected String resolveClientUsername() {
+    @Override
+    public void signalAuthMethodSuccess(ClientSession session, String service, Buffer buffer) throws Exception {
+        HostBasedAuthenticationReporter reporter = session.getHostBasedAuthenticationReporter();
+        if (reporter != null) {
+            reporter.signalAuthenticationSuccess(
+                    session, service, (keyInfo == null) ? null : keyInfo.getKey(),
+                    resolveClientHostname(session), resolveClientUsername(session));
+        }
+    }
+
+    @Override
+    public void signalAuthMethodFailure(
+            ClientSession session, String service, boolean partial, List<String> serverMethods, Buffer buffer)
+            throws Exception {
+        HostBasedAuthenticationReporter reporter = session.getHostBasedAuthenticationReporter();
+        if (reporter != null) {
+            reporter.signalAuthenticationFailure(
+                    session, service, (keyInfo == null) ? null : keyInfo.getKey(),
+                    resolveClientHostname(session), resolveClientUsername(session),
+                    partial, serverMethods);
+        }
+    }
+
+    protected String resolveClientUsername(ClientSession session) {
         String value = getClientUsername();
         return GenericUtils.isEmpty(value) ? OsUtils.getCurrentUser() : value;
     }
 
-    protected String resolveClientHostname() {
+    protected String resolveClientHostname(ClientSession session) {
         String value = getClientHostname();
         if (GenericUtils.isEmpty(value)) {
-            value = SshdSocketAddress.toAddressString(SshdSocketAddress.getFirstExternalNetwork4Address());
+            value = SshdSocketAddress.toAddressString(
+                    SshdSocketAddress.getFirstExternalNetwork4Address());
         }
 
         return GenericUtils.isEmpty(value) ? SshdSocketAddress.LOCALHOST_IPV4 : value;

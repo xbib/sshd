@@ -22,6 +22,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InterruptedIOException;
 import java.net.SocketException;
+import java.time.Duration;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -29,10 +30,10 @@ import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
-import org.apache.sshd.common.FactoryManager;
 import org.apache.sshd.common.PropertyResolver;
 import org.apache.sshd.common.util.buffer.Buffer;
 import org.apache.sshd.common.util.buffer.ByteArrayBuffer;
+import org.apache.sshd.common.CoreModuleProperties;
 
 /**
  * TODO Add javadoc
@@ -50,16 +51,20 @@ public class ChannelPipedInputStream extends InputStream implements ChannelPiped
     private final Condition dataAvailable = lock.newCondition();
 
     /**
-     * {@link ChannelPipedOutputStream} is already closed and so we will not receive additional data.
-     * This is different from the {@link #isOpen()}, which indicates that the reader of this {@link InputStream}
-     * will not be reading data any more.
+     * {@link ChannelPipedOutputStream} is already closed and so we will not receive additional data. This is different
+     * from the {@link #isOpen()}, which indicates that the reader of this {@link InputStream} will not be reading data
+     * any more.
      */
     private final AtomicBoolean writerClosed = new AtomicBoolean(false);
 
     private long timeout;
 
     public ChannelPipedInputStream(PropertyResolver resolver, Window localWindow) {
-        this(localWindow, resolver.getLongProperty(FactoryManager.WINDOW_TIMEOUT, FactoryManager.DEFAULT_WINDOW_TIMEOUT));
+        this(localWindow, CoreModuleProperties.WINDOW_TIMEOUT.getRequired(resolver));
+    }
+
+    public ChannelPipedInputStream(Window localWindow, Duration windowTimeout) {
+        this(localWindow, Objects.requireNonNull(windowTimeout, "No window timeout provided").toMillis());
     }
 
     public ChannelPipedInputStream(Window localWindow, long windowTimeout) {
@@ -139,7 +144,8 @@ public class ChannelPipedInputStream extends InputStream implements ChannelPiped
                         dataAvailable.await();
                     }
                 } catch (InterruptedException e) {
-                    throw (IOException) new InterruptedIOException("Interrupted at cycle #" + index + " while waiting for data to become available").initCause(e);
+                    throw (IOException) new InterruptedIOException(
+                            "Interrupted at cycle #" + index + " while waiting for data to become available").initCause(e);
                 }
             }
 

@@ -26,8 +26,8 @@ import java.nio.file.attribute.FileAttributeView;
 import java.nio.file.attribute.FileStoreAttributeView;
 import java.util.Collection;
 
-import org.apache.sshd.common.subsystem.sftp.SftpConstants;
 import org.apache.sshd.common.util.GenericUtils;
+import org.apache.sshd.common.SftpConstants;
 
 /**
  * @author <a href="mailto:dev@mina.apache.org">Apache MINA SSHD Project</a>
@@ -62,7 +62,7 @@ public class SftpFileStore extends FileStore {
 
     @Override
     public long getTotalSpace() throws IOException {
-        return Long.MAX_VALUE;  // TODO use SFTPv6 space-available extension
+        return Long.MAX_VALUE; // TODO use SFTPv6 space-available extension
     }
 
     @Override
@@ -85,7 +85,7 @@ public class SftpFileStore extends FileStore {
     @Override
     public boolean supportsFileAttributeView(String name) {
         if (GenericUtils.isEmpty(name)) {
-            return false;   // debug breakpoint
+            return false; // debug breakpoint
         }
 
         FileSystem sftpFs = getFileSystem();
@@ -95,11 +95,11 @@ public class SftpFileStore extends FileStore {
 
     @Override
     public <V extends FileStoreAttributeView> V getFileStoreAttributeView(Class<V> type) {
-        return null;    // no special views supported
+        return null; // no special views supported
     }
 
     @Override
     public Object getAttribute(String attribute) throws IOException {
-        return null;    // no special attributes supported
+        return null; // no special attributes supported
     }
 }

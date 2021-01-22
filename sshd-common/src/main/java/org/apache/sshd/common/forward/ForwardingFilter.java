@@ -18,41 +18,36 @@
  */
 package org.apache.sshd.common.forward;
 
-import java.io.IOException;
-
-import org.apache.sshd.common.Closeable;
+import org.apache.sshd.common.session.Session;
 import org.apache.sshd.common.util.net.SshdSocketAddress;
 
 /**
- * TODO Add javadoc
+ * Determines if a forwarding request will be permitted.
  *
  * @author <a href="mailto:dev@mina.apache.org">Apache MINA SSHD Project</a>
  */
-public interface ForwardingFilter
-        extends PortForwardingManager,
-        PortForwardingEventListenerManager,
-                PortForwardingEventListenerManagerHolder,
-                Closeable {
+public interface ForwardingFilter extends TcpForwardingFilter {
     /**
-     * @param remotePort The remote port
-     * @return The local {@link SshdSocketAddress} that the remote port is forwarded to
-     */
-    SshdSocketAddress getForwardedPort(int remotePort);
-
-    /**
-     * Called when the other side requested a remote port forward.
+     * Wraps separate filtering policies into one - any {@code null} one is assumed to be disabled
      *
-     * @param local The request address
-     * @return The bound local {@link SshdSocketAddress} - {@code null} if not allowed to forward
-     * @throws IOException If failed to handle request
+     * @param  tcpFilter   The {@link TcpForwardingFilter}
+     * @return             The combined implementation
      */
-    SshdSocketAddress localPortForwardingRequested(SshdSocketAddress local) throws IOException;
+    static ForwardingFilter asForwardingFilter(TcpForwardingFilter tcpFilter) {
+        if (tcpFilter == null) {
+            return RejectAllForwardingFilter.INSTANCE;
+        }
 
-    /**
-     * Called when the other side cancelled a remote port forward.
-     *
-     * @param local The local {@link SshdSocketAddress}
-     * @throws IOException If failed to handle request
-     */
-    void localPortForwardingCancelled(SshdSocketAddress local) throws IOException;
+        return new ForwardingFilter() {
+            @Override
+            public boolean canListen(SshdSocketAddress address, Session session) {
+                return tcpFilter.canListen(address, session);
+            }
+
+            @Override
+            public boolean canConnect(Type type, SshdSocketAddress address, Session session) {
+                return tcpFilter.canConnect(type, address, session);
+            }
+        };
+    }
 }

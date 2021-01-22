@@ -21,7 +21,6 @@ package org.apache.sshd.common.session.helpers;
 
 import java.io.IOException;
 
-import org.apache.sshd.common.PropertyResolverUtils;
 import org.apache.sshd.common.SshConstants;
 import org.apache.sshd.common.channel.Channel;
 import org.apache.sshd.common.io.IoWriteFuture;
@@ -30,6 +29,7 @@ import org.apache.sshd.common.session.Session;
 import org.apache.sshd.common.session.UnknownChannelReferenceHandler;
 import org.apache.sshd.common.util.buffer.Buffer;
 import org.apache.sshd.common.util.logging.AbstractLoggingBean;
+import org.apache.sshd.common.CoreModuleProperties;
 
 /**
  * @author <a href="mailto:dev@mina.apache.org">Apache MINA SSHD Project</a>
@@ -37,14 +37,6 @@ import org.apache.sshd.common.util.logging.AbstractLoggingBean;
 public class DefaultUnknownChannelReferenceHandler
         extends AbstractLoggingBean
         implements UnknownChannelReferenceHandler {
-    /**
-     * RFC4254 does not clearly specify how to handle {@code SSH_MSG_CHANNEL_DATA}
-     * and {@code SSH_MSG_CHANNEL_EXTENDED_DATA} received through an unknown channel.
-     * Therefore, we provide a configurable approach to it with the default set to ignore it.
-     */
-    public static final String SEND_REPLY_FOR_CHANNEL_DATA = "send-unknown-channel-data-reply";
-    // Not sure if entirely compliant with RFC4254, but try to stem the flood
-    public static final boolean DEFAULT_SEND_REPLY_FOR_CHANNEL_DATA = false;
 
     public static final DefaultUnknownChannelReferenceHandler INSTANCE = new DefaultUnknownChannelReferenceHandler();
 
@@ -55,7 +47,7 @@ public class DefaultUnknownChannelReferenceHandler
     @Override
     public Channel handleUnknownChannelCommand(
             ConnectionService service, byte cmd, int channelId, Buffer buffer)
-                    throws IOException {
+            throws IOException {
         Session session = service.getSession();
         // Use DEBUG level to avoid log overflow due to invalid messages flood
         boolean debugEnabled = log.isDebugEnabled();
@@ -70,25 +62,27 @@ public class DefaultUnknownChannelReferenceHandler
                 /*
                  * From RFC 4252 - section 5.4:
                  *
-                 *      If the request is not recognized or is not supported for the
-                 *      channel, SSH_MSG_CHANNEL_FAILURE is returned
+                 * If the request is not recognized or is not supported for the channel, SSH_MSG_CHANNEL_FAILURE is
+                 * returned
                  */
                 String req = buffer.getString();
                 wantReply = buffer.getBoolean();
                 // Use DEBUG level to avoid log overflow due to invalid messages flood
                 if (debugEnabled) {
-                    log.debug("handleUnknownChannelCommand({}) Received SSH_MSG_CHANNEL_REQUEST={} (wantReply={}) for unknown channel: {}",
-                        session, req, wantReply, channelId);
+                    log.debug(
+                            "handleUnknownChannelCommand({}) Received SSH_MSG_CHANNEL_REQUEST={} (wantReply={}) for unknown channel: {}",
+                            session, req, wantReply, channelId);
                 }
                 break;
             }
 
             case SshConstants.SSH_MSG_CHANNEL_DATA:
             case SshConstants.SSH_MSG_CHANNEL_EXTENDED_DATA:
-                wantReply = PropertyResolverUtils.getBooleanProperty(session, SEND_REPLY_FOR_CHANNEL_DATA, DEFAULT_SEND_REPLY_FOR_CHANNEL_DATA);
+                wantReply = CoreModuleProperties.SEND_REPLY_FOR_CHANNEL_DATA.getRequired(session);
                 // Use TRACE level to avoid log overflow due to invalid messages flood
                 if (log.isTraceEnabled()) {
-                    log.trace("handleUnknownChannelCommand({}) received msg channel data (opcode={}) reply={}", session, cmd, wantReply);
+                    log.trace("handleUnknownChannelCommand({}) received msg channel data (opcode={}) reply={}",
+                            session, cmd, wantReply);
                 }
                 break;
 
@@ -102,7 +96,9 @@ public class DefaultUnknownChannelReferenceHandler
         return null;
     }
 
-    protected IoWriteFuture sendFailureResponse(ConnectionService service, byte cmd, int channelId) throws IOException {
+    protected IoWriteFuture sendFailureResponse(
+            ConnectionService service, byte cmd, int channelId)
+            throws IOException {
         Session session = service.getSession();
         // Use DEBUG level to avoid log overflow due to invalid messages flood
         if (log.isDebugEnabled()) {

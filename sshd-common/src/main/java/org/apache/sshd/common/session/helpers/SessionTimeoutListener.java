@@ -23,16 +23,19 @@ import java.util.concurrent.CopyOnWriteArraySet;
 
 import org.apache.sshd.common.session.Session;
 import org.apache.sshd.common.session.SessionListener;
+import org.apache.sshd.common.util.GenericUtils;
 import org.apache.sshd.common.util.logging.AbstractLoggingBean;
 
 /**
- * Task that iterates over all currently open {@link AbstractSession}s and checks each of them for timeouts. If
- * the {@link AbstractSession} has timed out (either auth or idle timeout), the session will be disconnected.
+ * Task that iterates over all currently open {@link Session}s and checks each of them for timeouts. If the
+ * {@link AbstractSession} has timed out (either authentication or idle timeout), the session will be disconnected.
  *
- * @see AbstractSession#checkForTimeouts()
+ * @see SessionHelper#checkForTimeouts()
  */
-public class SessionTimeoutListener extends AbstractLoggingBean implements SessionListener, Runnable {
-    private final Set<AbstractSession> sessions = new CopyOnWriteArraySet<>();
+public class SessionTimeoutListener
+        extends AbstractLoggingBean
+        implements SessionListener, Runnable {
+    protected final Set<SessionHelper> sessions = new CopyOnWriteArraySet<>();
 
     public SessionTimeoutListener() {
         super();
@@ -40,8 +43,9 @@ public class SessionTimeoutListener extends AbstractLoggingBean implements Sessi
 
     @Override
     public void sessionCreated(Session session) {
-        if ((session instanceof AbstractSession) && ((session.getAuthTimeout() > 0L) || (session.getIdleTimeout() > 0L))) {
-            sessions.add((AbstractSession) session);
+        if ((session instanceof SessionHelper)
+                && (GenericUtils.isPositive(session.getAuthTimeout()) || GenericUtils.isPositive(session.getIdleTimeout()))) {
+            sessions.add((SessionHelper) session);
             if (log.isDebugEnabled()) {
                 log.debug("sessionCreated({}) tracking", session);
             }
@@ -53,18 +57,9 @@ public class SessionTimeoutListener extends AbstractLoggingBean implements Sessi
     }
 
     @Override
-    public void sessionEvent(Session session, Event event) {
-        // ignored
-    }
-
-    @Override
     public void sessionException(Session session, Throwable t) {
-        if (log.isDebugEnabled()) {
-            log.debug("sessionException({}) {}: {}", session, t.getClass().getSimpleName(), t.getMessage());
-        }
-        if (log.isTraceEnabled()) {
-            log.trace("sessionException(" + session + ") details", t);
-        }
+        debug("sessionException({}) {}: {}",
+                session, t.getClass().getSimpleName(), t.getMessage(), t);
         sessionClosed(session);
     }
 
@@ -84,11 +79,12 @@ public class SessionTimeoutListener extends AbstractLoggingBean implements Sessi
 
     @Override
     public void run() {
-        for (AbstractSession session : sessions) {
+        for (SessionHelper session : sessions) {
             try {
                 session.checkForTimeouts();
             } catch (Exception e) {
-                log.warn(e.getClass().getSimpleName() + " while checking session=" + session + " timeouts: " + e.getMessage(), e);
+                warn("run({}) {} while checking timeouts: {}", session, e.getClass().getSimpleName(), e.getMessage(),
+                        e);
             }
         }
     }

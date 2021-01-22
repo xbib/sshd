@@ -27,6 +27,7 @@ import org.apache.sshd.common.NamedFactory;
 import org.apache.sshd.common.NamedResource;
 import org.apache.sshd.common.OptionalFeature;
 import org.apache.sshd.common.io.nio2.Nio2ServiceFactoryFactory;
+import org.apache.sshd.common.util.ReflectionUtils;
 
 /**
  * @author <a href="mailto:dev@mina.apache.org">Apache MINA SSHD Project</a>
@@ -36,8 +37,8 @@ public enum BuiltinIoServiceFactoryFactories implements NamedFactory<IoServiceFa
     MINA("org.apache.sshd.common.io.mina.MinaServiceFactoryFactory"),
     NETTY("org.apache.sshd.netty.NettyIoServiceFactoryFactory");
 
-    public static final Set<BuiltinIoServiceFactoryFactories> VALUES =
-        Collections.unmodifiableSet(EnumSet.allOf(BuiltinIoServiceFactoryFactories.class));
+    public static final Set<BuiltinIoServiceFactoryFactories> VALUES
+            = Collections.unmodifiableSet(EnumSet.allOf(BuiltinIoServiceFactoryFactories.class));
 
     private final Class<? extends IoServiceFactoryFactory> factoryClass;
     private final String factoryClassName;
@@ -86,7 +87,7 @@ public enum BuiltinIoServiceFactoryFactories implements NamedFactory<IoServiceFa
     public final IoServiceFactoryFactory create() {
         Class<? extends IoServiceFactoryFactory> clazz = getFactoryClass();
         try {
-            return clazz.newInstance();
+            return ReflectionUtils.newInstance(clazz, IoServiceFactoryFactory.class);
         } catch (Throwable e) {
             if (e instanceof RuntimeException) {
                 throw (RuntimeException) e;

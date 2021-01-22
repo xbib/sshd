@@ -22,33 +22,31 @@ import java.io.IOException;
 import java.io.InterruptedIOException;
 import java.io.OutputStream;
 import java.io.StreamCorruptedException;
+import java.time.Duration;
 import java.util.Objects;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import org.apache.logging.log4j.Logger;
 import org.apache.sshd.common.SshConstants;
 import org.apache.sshd.common.SshException;
 import org.apache.sshd.common.channel.exception.SshChannelClosedException;
-import org.apache.sshd.common.io.PacketWriter;
+import org.apache.sshd.common.channel.throttle.ChannelStreamWriter;
 import org.apache.sshd.common.session.Session;
+import org.apache.sshd.common.util.GenericUtils;
 import org.apache.sshd.common.util.ValidateUtils;
 import org.apache.sshd.common.util.buffer.Buffer;
-import org.apache.logging.log4j.Logger;
+import org.apache.sshd.common.util.logging.LoggingUtils;
+import org.apache.sshd.common.CoreModuleProperties;
 
 /**
  * @author <a href="mailto:dev@mina.apache.org">Apache MINA SSHD Project</a>
  */
 public class ChannelOutputStream extends OutputStream implements java.nio.channels.Channel, ChannelHolder {
-    /**
-     * Configure max. wait time (millis) to wait for space to become available
-     */
-    public static final String WAIT_FOR_SPACE_TIMEOUT = "channel-output-wait-for-space-timeout";
-    public static final long DEFAULT_WAIT_FOR_SPACE_TIMEOUT = TimeUnit.SECONDS.toMillis(30L);
 
     private final AbstractChannel channelInstance;
-    private final PacketWriter packetWriter;
+    private final ChannelStreamWriter packetWriter;
     private final Window remoteWindow;
-    private final long maxWaitTimeout;
+    private final Duration maxWaitTimeout;
     private final Logger log;
     private final byte cmd;
     private final boolean eofOnClose;
@@ -59,15 +57,30 @@ public class ChannelOutputStream extends OutputStream implements java.nio.channe
     private int lastSize;
     private boolean noDelay;
 
-    public ChannelOutputStream(AbstractChannel channel, Window remoteWindow, Logger log, byte cmd, boolean eofOnClose) {
-        this(channel, remoteWindow, channel.getLongProperty(WAIT_FOR_SPACE_TIMEOUT, DEFAULT_WAIT_FOR_SPACE_TIMEOUT), log, cmd, eofOnClose);
+    public ChannelOutputStream(
+                               AbstractChannel channel, Window remoteWindow, Logger log, byte cmd, boolean eofOnClose) {
+        this(channel, remoteWindow,
+             CoreModuleProperties.WAIT_FOR_SPACE_TIMEOUT.getRequired(channel),
+             log, cmd, eofOnClose);
     }
 
-    public ChannelOutputStream(AbstractChannel channel, Window remoteWindow, long maxWaitTimeout, Logger log, byte cmd, boolean eofOnClose) {
+    public ChannelOutputStream(
+                               AbstractChannel channel, Window remoteWindow, long maxWaitTimeout, Logger log, byte cmd,
+                               boolean eofOnClose) {
+        this(channel, remoteWindow,
+             Duration.ofMillis(maxWaitTimeout),
+             log, cmd, eofOnClose);
+    }
+
+    public ChannelOutputStream(
+                               AbstractChannel channel, Window remoteWindow, Duration maxWaitTimeout, Logger log, byte cmd,
+                               boolean eofOnClose) {
         this.channelInstance = Objects.requireNonNull(channel, "No channel");
-        this.packetWriter = channelInstance.resolveChannelStreamPacketWriter(channel, cmd);
+        this.packetWriter = channelInstance.resolveChannelStreamWriter(channel, cmd);
         this.remoteWindow = Objects.requireNonNull(remoteWindow, "No remote window");
-        ValidateUtils.checkTrue(maxWaitTimeout > 0L, "Non-positive max. wait time: %d", maxWaitTimeout);
+        Objects.requireNonNull(maxWaitTimeout, "No maxWaitTimeout");
+        ValidateUtils.checkTrue(GenericUtils.isPositive(maxWaitTimeout), "Non-positive max. wait time: %s",
+                maxWaitTimeout.toString());
         this.maxWaitTimeout = maxWaitTimeout;
         this.log = Objects.requireNonNull(log, "No logger");
         this.cmd = cmd;
@@ -75,7 +88,7 @@ public class ChannelOutputStream extends OutputStream implements java.nio.channe
         newBuffer(0);
     }
 
-    @Override   // co-variant return
+    @Override // co-variant return
     public AbstractChannel getChannel() {
         return channelInstance;
     }
@@ -107,8 +120,9 @@ public class ChannelOutputStream extends OutputStream implements java.nio.channe
     public synchronized void write(byte[] buf, int s, int l) throws IOException {
         Channel channel = getChannel();
         if (!isOpen()) {
-            throw new SshChannelClosedException(channel.getId(),
-                "write(" + this + ") len=" + l + " - channel already closed");
+            throw new SshChannelClosedException(
+                    channel.getId(),
+                    "write(" + this + ") len=" + l + " - channel already closed");
         }
 
         Session session = channel.getSession();
@@ -121,7 +135,8 @@ public class ChannelOutputStream extends OutputStream implements java.nio.channe
             // packet we sent to allow the producer to race ahead and fill
             // out the next packet before we block and wait for space to
             // become available again.
-            long l2 = Math.min(l, Math.min(remoteWindow.getSize() + lastSize, remoteWindow.getPacketSize()) - bufferLength);
+            long minReqLen = Math.min(remoteWindow.getSize() + lastSize, remoteWindow.getPacketSize());
+            long l2 = Math.min(l, minReqLen - bufferLength);
             if (l2 <= 0) {
                 if (bufferLength > 0) {
                     flush();
@@ -133,10 +148,8 @@ public class ChannelOutputStream extends OutputStream implements java.nio.channe
                             log.trace("write({}) len={} - available={}", this, l, available);
                         }
                     } catch (IOException e) {
-                        if (debugEnabled) {
-                            log.debug("write({}) failed ({}) to wait for space of len={}: {}",
-                                      this, e.getClass().getSimpleName(), l, e.getMessage());
-                        }
+                        LoggingUtils.debug(log, "write({}) failed ({}) to wait for space of len={}: {}",
+                                this, e.getClass().getSimpleName(), l, e.getMessage(), e);
 
                         if ((e instanceof WindowClosedException) && (!closedState.getAndSet(true))) {
                             if (debugEnabled) {
@@ -146,14 +159,17 @@ public class ChannelOutputStream extends OutputStream implements java.nio.channe
 
                         throw e;
                     } catch (InterruptedException e) {
-                        throw (IOException) new InterruptedIOException("Interrupted while waiting for remote space on write len=" + l + " to " + this).initCause(e);
+                        throw (IOException) new InterruptedIOException(
+                                "Interrupted while waiting for remote space on write len=" + l + " to " + this)
+                                        .initCause(e);
                     }
                 }
                 session.resetIdleTimeout();
                 continue;
             }
 
-            ValidateUtils.checkTrue(l2 <= Integer.MAX_VALUE, "Accumulated bytes length exceeds int boundary: %d", l2);
+            ValidateUtils.checkTrue(l2 <= Integer.MAX_VALUE,
+                    "Accumulated bytes length exceeds int boundary: %d", l2);
             buffer.putRawBytes(buf, s, (int) l2);
             bufferLength += l2;
             s += l2;
@@ -171,8 +187,9 @@ public class ChannelOutputStream extends OutputStream implements java.nio.channe
     public synchronized void flush() throws IOException {
         AbstractChannel channel = getChannel();
         if (!isOpen()) {
-            throw new SshChannelClosedException(channel.getId(),
-                "flush(" + this + ") length=" + bufferLength + " - stream is already closed");
+            throw new SshChannelClosedException(
+                    channel.getId(),
+                    "flush(" + this + ") length=" + bufferLength + " - stream is already closed");
         }
 
         try {
@@ -190,19 +207,17 @@ public class ChannelOutputStream extends OutputStream implements java.nio.channe
                         log.trace("flush({}) len={}, available={}", this, total, available);
                     }
                 } catch (IOException e) {
-                    if (log.isDebugEnabled()) {
-                        log.debug("flush({}) failed ({}) to wait for space of len={}: {}",
-                                  this, e.getClass().getSimpleName(), total, e.getMessage());
-                    }
-
+                    LoggingUtils.debug(log, "flush({}) failed ({}) to wait for space of len={}: {}",
+                            this, e.getClass().getSimpleName(), total, e.getMessage(), e);
                     throw e;
                 }
 
                 long lenToSend = Math.min(available, total);
                 long length = Math.min(lenToSend, remoteWindow.getPacketSize());
                 if (length > Integer.MAX_VALUE) {
-                    throw new StreamCorruptedException("Accumulated " + SshConstants.getCommandMessageName(cmd)
-                        + " command bytes size (" + length + ") exceeds int boundaries");
+                    throw new StreamCorruptedException(
+                            "Accumulated " + SshConstants.getCommandMessageName(cmd)
+                                                       + " command bytes size (" + length + ") exceeds int boundaries");
                 }
 
                 int pos = buf.wpos();
@@ -222,9 +237,10 @@ public class ChannelOutputStream extends OutputStream implements java.nio.channe
                 session.resetIdleTimeout();
                 remoteWindow.waitAndConsume(length, maxWaitTimeout);
                 if (traceEnabled) {
-                    log.trace("flush({}) send {} len={}", channel, SshConstants.getCommandMessageName(cmd), length);
+                    log.trace("flush({}) send {} len={}",
+                            channel, SshConstants.getCommandMessageName(cmd), length);
                 }
-                packetWriter.writePacket(buf);
+                packetWriter.writeData(buf);
             }
         } catch (WindowClosedException e) {
             if (!closedState.getAndSet(true)) {
@@ -237,7 +253,9 @@ public class ChannelOutputStream extends OutputStream implements java.nio.channe
             if (e instanceof IOException) {
                 throw (IOException) e;
             } else if (e instanceof InterruptedException) {
-                throw (IOException) new InterruptedIOException("Interrupted while waiting for remote space flush len=" + bufferLength + " to " + this).initCause(e);
+                throw (IOException) new InterruptedIOException(
+                        "Interrupted while waiting for remote space flush len=" + bufferLength + " to " + this)
+                                .initCause(e);
             } else {
                 throw new SshException(e);
             }

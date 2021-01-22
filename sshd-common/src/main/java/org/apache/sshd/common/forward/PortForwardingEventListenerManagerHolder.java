@@ -19,7 +19,6 @@
 
 package org.apache.sshd.common.forward;
 
-import org.apache.sshd.common.forward.PortForwardingEventListenerManager;
 import java.util.Collection;
 
 /**
@@ -27,10 +26,9 @@ import java.util.Collection;
  */
 public interface PortForwardingEventListenerManagerHolder {
     /**
-     * @return The currently registered managers. <B>Note:</B> it is highly
-     * recommended that implementors return either an un-modifiable collection
-     * or a <U>copy</U> of the current one. Callers, should avoid modifying
-     * the retrieved value.
+     * @return The currently registered managers. <B>Note:</B> it is highly recommended that implementors return either
+     *         an un-modifiable collection or a <U>copy</U> of the current one. Callers, should avoid modifying the
+     *         retrieved value.
      */
     Collection<PortForwardingEventListenerManager> getRegisteredManagers();
 

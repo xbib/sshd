@@ -26,10 +26,10 @@ import java.nio.file.Path;
 import java.nio.file.attribute.FileAttributeView;
 import java.util.Objects;
 
-import org.apache.sshd.client.subsystem.sftp.SftpClient;
-import org.apache.sshd.common.subsystem.sftp.SftpConstants;
-import org.apache.sshd.common.subsystem.sftp.SftpException;
 import org.apache.sshd.common.util.logging.AbstractLoggingBean;
+import org.apache.sshd.client.SftpClient;
+import org.apache.sshd.common.SftpConstants;
+import org.apache.sshd.common.SftpException;
 
 /**
  * @author <a href="mailto:dev@mina.apache.org">Apache MINA SSHD Project</a>
@@ -51,8 +51,7 @@ public abstract class AbstractSftpFileAttributeView extends AbstractLoggingBean 
     }
 
     /**
-     * @return The underlying {@link SftpFileSystemProvider} used to
-     * provide the view functionality
+     * @return The underlying {@link SftpFileSystemProvider} used to provide the view functionality
      */
     public final SftpFileSystemProvider provider() {
         return provider;

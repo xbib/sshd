@@ -32,16 +32,16 @@ public interface PrivateKeyObfuscator {
     String getCipherName();
 
     /**
-     * @return A {@link List} of the supported key sizes - <B>Note:</B> every
-     * call returns a and <U>un-modifiable</U> instance.
+     * @return A {@link List} of the supported key sizes - <B>Note:</B> every call returns a and <U>un-modifiable</U>
+     *         instance.
      */
     List<Integer> getSupportedKeySizes();
 
     /**
-     * @param <A> Appendable generic type
-     * @param sb The {@link Appendable} instance to update
-     * @param encContext
-     * @return Same appendable instance
+     * @param  <A>         Appendable generic type
+     * @param  sb          The {@link Appendable} instance to update
+     * @param  encContext
+     * @return             Same appendable instance
      * @throws IOException
      */
     <A extends Appendable> A appendPrivateKeyEncryptionContext(
@@ -49,19 +49,19 @@ public interface PrivateKeyObfuscator {
             throws IOException;
 
     /**
-     * @param encContext The encryption context
-     * @return An initialization vector suitable to the specified context
+     * @param  encContext               The encryption context
+     * @return                          An initialization vector suitable to the specified context
      * @throws GeneralSecurityException
      */
     byte[] generateInitializationVector(PrivateKeyEncryptionContext encContext)
-        throws GeneralSecurityException;
+            throws GeneralSecurityException;
 
     /**
-     * @param bytes Original bytes
-     * @param encContext The encryption context
-     * @param encryptIt If {@code true} then encrypt the original bytes, otherwise decrypt them
-     * @return The result of applying the cipher to the original bytes
-     * @throws IOException If malformed input
+     * @param  bytes                    Original bytes
+     * @param  encContext               The encryption context
+     * @param  encryptIt                If {@code true} then encrypt the original bytes, otherwise decrypt them
+     * @return                          The result of applying the cipher to the original bytes
+     * @throws IOException              If malformed input
      * @throws GeneralSecurityException If cannot encrypt/decrypt
      */
     byte[] applyPrivateKeyCipher(

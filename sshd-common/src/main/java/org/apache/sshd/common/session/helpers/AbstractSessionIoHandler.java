@@ -52,7 +52,8 @@ public abstract class AbstractSessionIoHandler extends AbstractLoggingBean imple
         if (session != null) {
             session.exceptionCaught(cause);
         } else {
-            throw new MissingAttachedSessionException("No session available to signal caught exception=" + cause.getClass().getSimpleName(), cause);
+            throw new MissingAttachedSessionException(
+                    "No session available to signal caught exception=" + cause.getClass().getSimpleName(), cause);
         }
     }
 
@@ -62,14 +63,8 @@ public abstract class AbstractSessionIoHandler extends AbstractLoggingBean imple
         try {
             session.messageReceived(message);
         } catch (Error e) {
-            if (log.isDebugEnabled()) {
-                log.debug("messageReceived({}) failed {} to handle message: {}",
-                      ioSession, e.getClass().getSimpleName(), e.getMessage());
-            }
-
-            if (log.isTraceEnabled()) {
-                log.trace("messageReceived(" + ioSession + ") message handling error details", e);
-            }
+            log.debug("messageReceived({}) failed {} to handle message: {}",
+                    ioSession, e.getClass().getSimpleName(), e.getMessage(), e);
             throw new RuntimeSshException(e);
         }
     }

@@ -37,9 +37,10 @@ import org.apache.sshd.common.util.ValidateUtils;
 import org.apache.sshd.common.util.buffer.Buffer;
 import org.apache.sshd.common.util.threads.CloseableExecutorService;
 import org.apache.sshd.common.util.threads.ThreadUtils;
+import org.apache.sshd.common.CoreModuleProperties;
 
 /**
- * TODO Add javadoc
+ * Client side channel session
  *
  * @author <a href="mailto:dev@mina.apache.org">Apache MINA SSHD Project</a>
  */
@@ -71,7 +72,8 @@ public class ChannelSession extends AbstractClientChannel {
             asyncOut = new ChannelAsyncInputStream(this);
             asyncErr = new ChannelAsyncInputStream(this);
         } else {
-            invertedIn = new ChannelOutputStream(this, getRemoteWindow(), log, SshConstants.SSH_MSG_CHANNEL_DATA, true);
+            invertedIn = new ChannelOutputStream(
+                    this, getRemoteWindow(), log, SshConstants.SSH_MSG_CHANNEL_DATA, true);
 
             Window wLocal = getLocalWindow();
             if (out == null) {
@@ -91,7 +93,8 @@ public class ChannelSession extends AbstractClientChannel {
                 // allocate a temporary executor service if none provided
                 CloseableExecutorService service = getExecutorService();
                 if (service == null) {
-                    pumperService = ThreadUtils.newSingleThreadExecutor("ClientInputStreamPump[" + this.toString() + "]");
+                    pumperService = ThreadUtils.newSingleThreadExecutor(
+                            "ClientInputStreamPump[" + this + "]");
                 } else {
                     pumperService = ThreadUtils.noClose(service);
                 }
@@ -105,7 +108,8 @@ public class ChannelSession extends AbstractClientChannel {
     }
 
     @Override
-    protected RequestHandler.Result handleInternalRequest(String req, boolean wantReply, Buffer buffer) throws IOException {
+    protected RequestHandler.Result handleInternalRequest(String req, boolean wantReply, Buffer buffer)
+            throws IOException {
         switch (req) {
             case "xon-xoff":
                 return handleXonXoff(buffer, wantReply);
@@ -127,9 +131,9 @@ public class ChannelSession extends AbstractClientChannel {
     @Override
     protected Closeable getInnerCloseable() {
         return builder()
-            .close(super.getInnerCloseable())
-            .run(toString(), this::closeImmediately0)
-            .build();
+                .close(super.getInnerCloseable())
+                .run(toString(), this::closeImmediately0)
+                .build();
     }
 
     protected void closeImmediately0() {
@@ -141,14 +145,9 @@ public class ChannelSession extends AbstractClientChannel {
 
                 pumperService.shutdownNow();
             } catch (Exception e) {
-                // we log it as DEBUG since it is relatively harmless
-                if (log.isDebugEnabled()) {
-                    log.debug("doCloseImmediately({}) failed {} to shutdown stream pumper: {}",
-                          this, e.getClass().getSimpleName(), e.getMessage());
-                }
-                if (log.isTraceEnabled()) {
-                    log.trace("doCloseImmediately(" + this + ") stream pumper shutdown error details", e);
-                }
+                // we log it as WARN since it is relatively harmless
+                warn("doCloseImmediately({}) failed {} to shutdown stream pumper: {}",
+                        this, e.getClass().getSimpleName(), e.getMessage(), e);
             } finally {
                 pumper = null;
                 pumperService = null;
@@ -157,16 +156,21 @@ public class ChannelSession extends AbstractClientChannel {
     }
 
     protected void pumpInputStream() {
+        boolean debugEnabled = log.isDebugEnabled();
         try {
             Session session = getSession();
             Window wRemote = getRemoteWindow();
             long packetSize = wRemote.getPacketSize();
-            ValidateUtils.checkTrue(packetSize < Integer.MAX_VALUE, "Remote packet size exceeds int boundary: %d", packetSize);
+            ValidateUtils.checkTrue((packetSize > 0) && (packetSize < Integer.MAX_VALUE),
+                    "Invalid remote packet size int boundary: %d", packetSize);
             byte[] buffer = new byte[(int) packetSize];
+            int maxChunkSize = CoreModuleProperties.INPUT_STREAM_PUMP_CHUNK_SIZE.getRequired(session);
+            maxChunkSize = Math.max(maxChunkSize, CoreModuleProperties.INPUT_STREAM_PUMP_CHUNK_SIZE.getRequiredDefault());
+
             while (!closeFuture.isClosed()) {
-                int len = securedRead(in, buffer, 0, buffer.length);
+                int len = securedRead(in, maxChunkSize, buffer, 0, buffer.length);
                 if (len < 0) {
-                    if (log.isDebugEnabled()) {
+                    if (debugEnabled) {
                         log.debug("pumpInputStream({}) EOF signalled", this);
                     }
                     sendEof();
@@ -180,40 +184,35 @@ public class ChannelSession extends AbstractClientChannel {
                 }
             }
 
-            if (log.isDebugEnabled()) {
+            if (debugEnabled) {
                 log.debug("pumpInputStream({}) close future closed", this);
             }
         } catch (Exception e) {
             if (!isClosing()) {
-                if (log.isDebugEnabled()) {
-                    log.debug("pumpInputStream({}) Caught {} : {}", this, e.getClass().getSimpleName(), e.getMessage());
-                }
-                if (log.isTraceEnabled()) {
-                    log.trace("pumpInputStream(" + this + ") caught exception details", e);
-                }
+                error("pumpInputStream({}) Caught {} : {}",
+                        this, e.getClass().getSimpleName(), e.getMessage(), e);
                 close(false);
             }
         }
     }
 
-    //
-    // On some platforms, a call to System.in.read(new byte[65536], 0,32768) always throws an IOException.
-    // So we need to protect against that and chunk the call into smaller calls.
-    // This problem was found on Windows, JDK 1.6.0_03-b05.
-    //
-    protected int securedRead(InputStream in, byte[] buf, int off, int len) throws IOException {
-        int n = 0;
-        for (;;) {
-            int nread = in.read(buf, off + n, Math.min(1024, len - n));
+    protected int securedRead(
+            InputStream in, int maxChunkSize, byte[] buf, int off, int len)
+            throws IOException {
+        for (int n = 0;;) {
+            int nread = in.read(buf, off + n, Math.min(maxChunkSize, len - n));
             if (nread <= 0) {
                 return (n == 0) ? nread : n;
             }
+
             n += nread;
             if (n >= len) {
                 return n;
             }
+
             // if not closed but no bytes available, return
-            if (in.available() <= 0) {
+            int availLen = in.available();
+            if (availLen <= 0) {
                 return n;
             }
         }

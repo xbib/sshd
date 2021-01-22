@@ -19,6 +19,7 @@
 
 package org.apache.sshd.common.kex;
 
+import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 
@@ -35,10 +36,10 @@ import org.apache.sshd.common.util.closeable.AbstractInnerCloseable;
  * @author <a href="mailto:dev@mina.apache.org">Apache MINA SSHD Project</a>
  */
 public abstract class AbstractKexFactoryManager
-              extends AbstractInnerCloseable
-              implements KexFactoryManager {
+        extends AbstractInnerCloseable
+        implements KexFactoryManager {
     private final KexFactoryManager delegate;
-    private List<NamedFactory<KeyExchange>> keyExchangeFactories;
+    private List<KeyExchangeFactory> keyExchangeFactories;
     private List<NamedFactory<Cipher>> cipherFactories;
     private List<NamedFactory<Compression>> compressionFactories;
     private List<NamedFactory<Mac>> macFactories;
@@ -58,14 +59,14 @@ public abstract class AbstractKexFactoryManager
     }
 
     @Override
-    public List<NamedFactory<KeyExchange>> getKeyExchangeFactories() {
+    public List<KeyExchangeFactory> getKeyExchangeFactories() {
         KexFactoryManager parent = getDelegate();
         return resolveEffectiveFactories(keyExchangeFactories,
-            (parent == null) ? Collections.emptyList() : parent.getKeyExchangeFactories());
+                (parent == null) ? Collections.emptyList() : parent.getKeyExchangeFactories());
     }
 
     @Override
-    public void setKeyExchangeFactories(List<NamedFactory<KeyExchange>> keyExchangeFactories) {
+    public void setKeyExchangeFactories(List<KeyExchangeFactory> keyExchangeFactories) {
         this.keyExchangeFactories = keyExchangeFactories;
     }
 
@@ -73,7 +74,7 @@ public abstract class AbstractKexFactoryManager
     public List<NamedFactory<Cipher>> getCipherFactories() {
         KexFactoryManager parent = getDelegate();
         return resolveEffectiveFactories(cipherFactories,
-            (parent == null) ? Collections.emptyList() : parent.getCipherFactories());
+                (parent == null) ? Collections.emptyList() : parent.getCipherFactories());
     }
 
     @Override
@@ -85,7 +86,7 @@ public abstract class AbstractKexFactoryManager
     public List<NamedFactory<Compression>> getCompressionFactories() {
         KexFactoryManager parent = getDelegate();
         return resolveEffectiveFactories(compressionFactories,
-            (parent == null) ? Collections.emptyList() : parent.getCompressionFactories());
+                (parent == null) ? Collections.emptyList() : parent.getCompressionFactories());
     }
 
     @Override
@@ -97,7 +98,7 @@ public abstract class AbstractKexFactoryManager
     public List<NamedFactory<Mac>> getMacFactories() {
         KexFactoryManager parent = getDelegate();
         return resolveEffectiveFactories(macFactories,
-            (parent == null) ? Collections.emptyList() : parent.getMacFactories());
+                (parent == null) ? Collections.emptyList() : parent.getMacFactories());
     }
 
     @Override
@@ -109,7 +110,7 @@ public abstract class AbstractKexFactoryManager
     public List<NamedFactory<Signature>> getSignatureFactories() {
         KexFactoryManager parent = getDelegate();
         return resolveEffectiveFactories(signatureFactories,
-            (parent == null) ? Collections.emptyList() : parent.getSignatureFactories());
+                (parent == null) ? Collections.emptyList() : parent.getSignatureFactories());
     }
 
     @Override
@@ -121,7 +122,7 @@ public abstract class AbstractKexFactoryManager
     public KexExtensionHandler getKexExtensionHandler() {
         KexFactoryManager parent = getDelegate();
         return resolveEffectiveProvider(
-            KexExtensionHandler.class, kexExtensionHandler, (parent == null) ? null : parent.getKexExtensionHandler());
+                KexExtensionHandler.class, kexExtensionHandler, (parent == null) ? null : parent.getKexExtensionHandler());
     }
 
     @Override
@@ -129,7 +130,7 @@ public abstract class AbstractKexFactoryManager
         this.kexExtensionHandler = kexExtensionHandler;
     }
 
-    protected <V> List<V> resolveEffectiveFactories(List<V> local, List<V> inherited) {
+    protected <V, C extends Collection<V>> C resolveEffectiveFactories(C local, C inherited) {
         if (GenericUtils.isEmpty(local)) {
             return inherited;
         } else {

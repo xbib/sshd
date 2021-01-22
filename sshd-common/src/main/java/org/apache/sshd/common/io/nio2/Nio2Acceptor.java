@@ -42,17 +42,18 @@ import org.apache.sshd.common.io.IoServiceEventListener;
 import org.apache.sshd.common.util.GenericUtils;
 import org.apache.sshd.common.util.ValidateUtils;
 import org.apache.sshd.common.util.io.IoUtils;
+import org.apache.sshd.common.CoreModuleProperties;
 
 /**
  * @author <a href="mailto:dev@mina.apache.org">Apache MINA SSHD Project</a>
  */
 public class Nio2Acceptor extends Nio2Service implements IoAcceptor {
     protected final Map<SocketAddress, AsynchronousServerSocketChannel> channels = new ConcurrentHashMap<>();
-    private int backlog = DEFAULT_BACKLOG;
+    private int backlog;
 
     public Nio2Acceptor(FactoryManager manager, IoHandler handler, AsynchronousChannelGroup group) {
         super(manager, handler, group);
-        backlog = manager.getIntProperty(FactoryManager.SOCKET_BACKLOG, DEFAULT_BACKLOG);
+        backlog = CoreModuleProperties.SOCKET_BACKLOG.getRequired(manager);
     }
 
     @Override
@@ -71,11 +72,9 @@ public class Nio2Acceptor extends Nio2Service implements IoAcceptor {
                 }
 
                 try {
-                    AsynchronousServerSocketChannel asyncChannel =
-                        openAsynchronousServerSocketChannel(address, group);
+                    AsynchronousServerSocketChannel asyncChannel = openAsynchronousServerSocketChannel(address, group);
                     // In case it or the other bindings fail
-                    java.io.Closeable protector =
-                        protectInProgressBinding(address, asyncChannel);
+                    java.io.Closeable protector = protectInProgressBinding(address, asyncChannel);
                     bound.add(protector);
 
                     AsynchronousServerSocketChannel socket = setSocketOptions(asyncChannel);
@@ -90,26 +89,23 @@ public class Nio2Acceptor extends Nio2Service implements IoAcceptor {
                     if (prev != null) {
                         if (debugEnabled) {
                             log.debug("bind({}) replaced previous channel ({}) for {}",
-                                address, prev.getLocalAddress(), local);
+                                    address, prev.getLocalAddress(), local);
                         }
                     }
 
-                    CompletionHandler<AsynchronousSocketChannel, ? super SocketAddress> handler =
-                        ValidateUtils.checkNotNull(createSocketCompletionHandler(channels, socket),
-                            "No completion handler created for address=%s[%s]",
-                            address, local);
+                    CompletionHandler<AsynchronousSocketChannel, ? super SocketAddress> handler
+                            = ValidateUtils.checkNotNull(createSocketCompletionHandler(channels, socket),
+                                    "No completion handler created for address=%s[%s]",
+                                    address, local);
                     socket.accept(local, handler);
                 } catch (IOException | RuntimeException e) {
-                    log.error("bind({}) - failed ({}) to bind: {}",
-                        address, e.getClass().getSimpleName(), e.getMessage());
-                    if (debugEnabled) {
-                        log.debug("bind(" + address + ") failure details", e);
-                    }
+                    error("bind({}) - failed ({}) to bind: {}",
+                            address, e.getClass().getSimpleName(), e.getMessage(), e);
                     throw e;
                 }
             }
 
-            bound.clear();  // avoid auto-close at finally clause
+            bound.clear(); // avoid auto-close at finally clause
         } finally {
             IOException err = IoUtils.closeQuietly(bound);
             if (err != null) {
@@ -160,13 +156,13 @@ public class Nio2Acceptor extends Nio2Service implements IoAcceptor {
 
     protected AsynchronousServerSocketChannel openAsynchronousServerSocketChannel(
             SocketAddress address, AsynchronousChannelGroup group)
-                throws IOException {
+            throws IOException {
         return AsynchronousServerSocketChannel.open(group);
     }
 
     protected CompletionHandler<AsynchronousSocketChannel, ? super SocketAddress> createSocketCompletionHandler(
             Map<SocketAddress, AsynchronousServerSocketChannel> channelsMap, AsynchronousServerSocketChannel socket)
-                throws IOException {
+            throws IOException {
         return new AcceptCompletionHandler(socket);
     }
 
@@ -187,7 +183,6 @@ public class Nio2Acceptor extends Nio2Service implements IoAcceptor {
 
     @Override
     public void unbind(Collection<? extends SocketAddress> addresses) {
-        boolean debugEnabled = log.isDebugEnabled();
         boolean traceEnabled = log.isTraceEnabled();
         for (SocketAddress address : addresses) {
             AsynchronousServerSocketChannel channel = channels.remove(address);
@@ -198,11 +193,8 @@ public class Nio2Acceptor extends Nio2Service implements IoAcceptor {
                     }
                     channel.close();
                 } catch (IOException e) {
-                    log.warn("unbind({}) {} while unbinding channel: {}",
-                        address, e.getClass().getSimpleName(), e.getMessage());
-                    if (debugEnabled) {
-                        log.debug("unbind(" + address + ") failure details", e);
-                    }
+                    warn("unbind({}) {} while unbinding channel: {}",
+                            address, e.getClass().getSimpleName(), e.getMessage(), e);
                 }
             } else {
                 if (traceEnabled) {
@@ -231,9 +223,9 @@ public class Nio2Acceptor extends Nio2Service implements IoAcceptor {
     @Override
     protected Closeable getInnerCloseable() {
         return builder()
-            .close(super.getInnerCloseable())
-            .run(toString(), this::closeImmediately0)
-            .build();
+                .close(super.getInnerCloseable())
+                .run(toString(), this::closeImmediately0)
+                .build();
     }
 
     protected void closeImmediately0() {
@@ -242,7 +234,7 @@ public class Nio2Acceptor extends Nio2Service implements IoAcceptor {
         for (SocketAddress address : boundAddresses) {
             AsynchronousServerSocketChannel asyncChannel = channels.remove(address);
             if (asyncChannel == null) {
-                continue;   // debug breakpoint
+                continue; // debug breakpoint
             }
 
             try {
@@ -296,8 +288,8 @@ public class Nio2Acceptor extends Nio2Service implements IoAcceptor {
                 IoHandler handler = getIoHandler();
                 setSocketOptions(result);
                 session = Objects.requireNonNull(
-                    createSession(Nio2Acceptor.this, address, result, handler),
-                    "No NIO2 session created");
+                        createSession(Nio2Acceptor.this, address, result, handler),
+                        "No NIO2 session created");
                 sessionId = session.getId();
                 handler.sessionCreated(session);
                 sessions.put(sessionId, session);
@@ -320,7 +312,8 @@ public class Nio2Acceptor extends Nio2Service implements IoAcceptor {
                         listener.abortAcceptedConnection(Nio2Acceptor.this, localAddress, remoteAddress, address, exc);
                     } catch (Exception e) {
                         if (log.isDebugEnabled()) {
-                            log.debug("onCompleted(" + address + ") listener=" + listener + " ignoring abort event exception", e);
+                            log.debug("onCompleted(" + address + ") listener=" + listener + " ignoring abort event exception",
+                                    e);
                         }
                     }
                 }
@@ -332,9 +325,9 @@ public class Nio2Acceptor extends Nio2Service implements IoAcceptor {
                         session.close();
                     } catch (Throwable t) {
                         log.warn("onCompleted(" + address + ") Failed (" + t.getClass().getSimpleName() + ")"
-                               + " to close accepted connection from " + address
-                               + ": " + t.getMessage(),
-                                 t);
+                                 + " to close accepted connection from " + address
+                                 + ": " + t.getMessage(),
+                                t);
                     }
                 }
 
@@ -355,7 +348,7 @@ public class Nio2Acceptor extends Nio2Service implements IoAcceptor {
 
         protected Nio2Session createSession(
                 Nio2Acceptor acceptor, SocketAddress address, AsynchronousSocketChannel channel, IoHandler handler)
-                    throws Throwable {
+                throws Throwable {
             if (log.isTraceEnabled()) {
                 log.trace("createNio2Session({}) address={}", acceptor, address);
             }
@@ -371,8 +364,9 @@ public class Nio2Acceptor extends Nio2Service implements IoAcceptor {
                 } catch (Throwable t) {
                     // Do not call failed(t, address) to avoid infinite recursion
                     log.error("Failed (" + t.getClass().getSimpleName()
-                        + " to re-accept new connections on " + address
-                        + ": " + t.getMessage(), t);
+                              + " to re-accept new connections on " + address
+                              + ": " + t.getMessage(),
+                            t);
                 }
             }
         }
@@ -383,7 +377,7 @@ public class Nio2Acceptor extends Nio2Service implements IoAcceptor {
             if (channel == null) {
                 if (debugEnabled) {
                     log.debug("Caught {} for untracked channel of {}: {}",
-                        exc.getClass().getSimpleName(), address, exc.getMessage());
+                            exc.getClass().getSimpleName(), address, exc.getMessage());
                 }
                 return false;
             }
@@ -391,18 +385,13 @@ public class Nio2Acceptor extends Nio2Service implements IoAcceptor {
             if (disposing.get()) {
                 if (debugEnabled) {
                     log.debug("Caught {} for tracked channel of {} while disposing: {}",
-                        exc.getClass().getSimpleName(), address, exc.getMessage());
+                            exc.getClass().getSimpleName(), address, exc.getMessage());
                 }
                 return false;
             }
 
-            if (debugEnabled) {
-                log.debug("Caught {} while accepting incoming connection from {}: {}",
-                    exc.getClass().getSimpleName(), address, exc.getMessage());
-            }
-            if (log.isTraceEnabled()) {
-                log.trace("Incoming connection from " + address + " failure details", exc);
-            }
+            debug("Caught {} while accepting incoming connection from {}: {}",
+                    exc.getClass().getSimpleName(), address, exc.getMessage(), exc);
             return true;
         }
     }

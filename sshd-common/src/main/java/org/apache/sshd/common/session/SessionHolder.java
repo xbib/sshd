@@ -20,10 +20,15 @@
 package org.apache.sshd.common.session;
 
 /**
- * @param <S> Type of {@link Session} being held
- * @author <a href="mailto:dev@mina.apache.org">Apache MINA SSHD Project</a>
+ * @param  <S> Type of {@link Session} being held
+ * @author     <a href="mailto:dev@mina.apache.org">Apache MINA SSHD Project</a>
  */
 @FunctionalInterface
-public interface SessionHolder<S extends Session> {
+public interface SessionHolder<S extends Session> extends SessionContextHolder {
+    @Override
+    default SessionContext getSessionContext() {
+        return getSession();
+    }
+
     S getSession();
 }

@@ -20,8 +20,10 @@
 package org.apache.sshd.client.kex;
 
 import java.math.BigInteger;
+import java.security.PublicKey;
 import java.util.Objects;
 
+import org.apache.sshd.client.session.AbstractClientSession;
 import org.apache.sshd.common.NamedFactory;
 import org.apache.sshd.common.SshConstants;
 import org.apache.sshd.common.SshException;
@@ -35,31 +37,71 @@ import org.apache.sshd.common.signature.Signature;
 import org.apache.sshd.common.util.GenericUtils;
 import org.apache.sshd.common.util.ValidateUtils;
 import org.apache.sshd.common.util.buffer.Buffer;
+import org.apache.sshd.common.util.buffer.BufferUtils;
 import org.apache.sshd.common.util.buffer.ByteArrayBuffer;
 import org.apache.sshd.common.util.security.SecurityUtils;
+import org.apache.sshd.common.CoreModuleProperties;
 
 /**
  * @author <a href="mailto:dev@mina.apache.org">Apache MINA SSHD Project</a>
  */
 public class DHGEXClient extends AbstractDHClientKeyExchange {
+
     protected final DHFactory factory;
     protected byte expected;
-    protected int min = SecurityUtils.MIN_DHGEX_KEY_SIZE;
+    protected int min;
     protected int prf;
     protected int max;
     protected AbstractDH dh;
-    protected byte[] p;
     protected byte[] g;
 
-    protected DHGEXClient(DHFactory factory) {
+    private byte[] p;
+    private BigInteger pValue;
+
+    protected DHGEXClient(DHFactory factory, Session session) {
+        super(session);
         this.factory = Objects.requireNonNull(factory, "No factory");
-        this.max = SecurityUtils.getMaxDHGroupExchangeKeySize();
-        this.prf = Math.min(SecurityUtils.PREFERRED_DHGEX_KEY_SIZE, max);
+
+        // SSHD-941 give the user a chance to intervene in the choice
+        min = CoreModuleProperties.PROP_DHGEX_CLIENT_MIN_KEY.get(session)
+                .orElse(SecurityUtils.getMinDHGroupExchangeKeySize());
+        max = CoreModuleProperties.PROP_DHGEX_CLIENT_MAX_KEY.get(session)
+                .orElse(SecurityUtils.getMaxDHGroupExchangeKeySize());
+        prf = CoreModuleProperties.PROP_DHGEX_CLIENT_PRF_KEY.get(session)
+                .orElse(Math.min(SecurityUtils.PREFERRED_DHGEX_KEY_SIZE, max));
     }
 
     @Override
     public final String getName() {
         return factory.getName();
+    }
+
+    protected byte[] getP() {
+        return p;
+    }
+
+    protected BigInteger getPValue() {
+        if (pValue == null) {
+            pValue = BufferUtils.fromMPIntBytes(getP());
+        }
+
+        return pValue;
+    }
+
+    protected void setP(byte[] p) {
+        this.p = p;
+
+        if (pValue != null) {
+            pValue = null;  // force lazy re-initialization
+        }
+    }
+
+    protected void validateEValue() throws Exception {
+        validateEValue(getPValue());
+    }
+
+    protected void validateFValue() throws Exception {
+        validateFValue(getPValue());
     }
 
     public static KeyExchangeFactory newFactory(DHFactory delegate) {
@@ -70,25 +112,34 @@ public class DHGEXClient extends AbstractDHClientKeyExchange {
             }
 
             @Override
-            public KeyExchange create() {
-                return new DHGEXClient(delegate);
+            public KeyExchange createKeyExchange(Session session) throws Exception {
+                return new DHGEXClient(delegate, session);
             }
 
             @Override
             public String toString() {
                 return NamedFactory.class.getSimpleName()
-                    + "<" + KeyExchange.class.getSimpleName() + ">"
-                    + "[" + getName() + "]";
+                       + "<" + KeyExchange.class.getSimpleName() + ">"
+                       + "[" + getName() + "]";
             }
         };
     }
 
     @Override
-    public void init(Session s, byte[] v_s, byte[] v_c, byte[] i_s, byte[] i_c) throws Exception {
-        super.init(s, v_s, v_c, i_s, i_c);
+    public void init(byte[] v_s, byte[] v_c, byte[] i_s, byte[] i_c) throws Exception {
+        super.init(v_s, v_c, i_s, i_c);
+
+        Session s = getSession();
         if (log.isDebugEnabled()) {
-            log.debug("init({}) Send SSH_MSG_KEX_DH_GEX_REQUEST", s);
+            log.debug("init({})[{}] Send SSH_MSG_KEX_DH_GEX_REQUEST - min={}, prf={}, max={}",
+                    this, s, min, prf, max);
         }
+        if ((max < min) || (prf < min) || (max < prf)) {
+            throw new SshException(
+                    SshConstants.SSH2_DISCONNECT_KEY_EXCHANGE_FAILED,
+                    "Protocol error: bad parameters " + min + " !< " + prf + " !< " + max);
+        }
+
         Buffer buffer = s.createBuffer(SshConstants.SSH_MSG_KEX_DH_GEX_REQUEST, Integer.SIZE);
         buffer.putInt(min);
         buffer.putInt(prf);
@@ -101,33 +152,38 @@ public class DHGEXClient extends AbstractDHClientKeyExchange {
     @Override
     @SuppressWarnings("checkstyle:VariableDeclarationUsageDistance")
     public boolean next(int cmd, Buffer buffer) throws Exception {
-        Session session = getSession();
+        AbstractClientSession session = getClientSession();
         boolean debugEnabled = log.isDebugEnabled();
         if (debugEnabled) {
-            log.debug("next({})[{}] process command={}",
-                this, session, KeyExchange.getGroupKexOpcodeName(cmd));
+            log.debug("next({})[{}] process command={} (expected={})",
+                    this, session, KeyExchange.getGroupKexOpcodeName(cmd),
+                    KeyExchange.getGroupKexOpcodeName(expected));
         }
 
         if (cmd != expected) {
-            throw new SshException(SshConstants.SSH2_DISCONNECT_KEY_EXCHANGE_FAILED,
-                "Protocol error: expected packet " + KeyExchange.getGroupKexOpcodeName(expected)
-              + ", got " + KeyExchange.getGroupKexOpcodeName(cmd));
+            throw new SshException(
+                    SshConstants.SSH2_DISCONNECT_KEY_EXCHANGE_FAILED,
+                    "Protocol error: expected packet " + KeyExchange.getGroupKexOpcodeName(expected)
+                                                                      + ", got " + KeyExchange.getGroupKexOpcodeName(cmd));
         }
 
         if (cmd == SshConstants.SSH_MSG_KEX_DH_GEX_GROUP) {
-            p = buffer.getMPIntAsBytes();
+            setP(buffer.getMPIntAsBytes());
             g = buffer.getMPIntAsBytes();
 
-            dh = getDH(new BigInteger(p), new BigInteger(g));
+            dh = getDH(getPValue(), new BigInteger(g));
             hash = dh.getHash();
             hash.init();
-            e = dh.getE();
+
+            byte[] e = updateE(dh.getE());
+            validateEValue();
 
             if (debugEnabled) {
                 log.debug("next({})[{}] Send SSH_MSG_KEX_DH_GEX_INIT", this, session);
             }
+
             buffer = session.createBuffer(
-                SshConstants.SSH_MSG_KEX_DH_GEX_INIT, e.length + Byte.SIZE);
+                    SshConstants.SSH_MSG_KEX_DH_GEX_INIT, e.length + Byte.SIZE);
             buffer.putMPInt(e);
             session.writePacket(buffer);
             expected = SshConstants.SSH_MSG_KEX_DH_GEX_REPLY;
@@ -135,18 +191,28 @@ public class DHGEXClient extends AbstractDHClientKeyExchange {
         }
 
         if (cmd == SshConstants.SSH_MSG_KEX_DH_GEX_REPLY) {
+            if (debugEnabled) {
+                log.debug("next({})[{}] validate SSH_MSG_KEX_DH_GEX_REPLY - min={}, prf={}, max={}",
+                        this, session, min, prf, max);
+            }
+
             byte[] k_s = buffer.getBytes();
-            f = buffer.getMPIntAsBytes();
+            byte[] f = updateF(buffer);
             byte[] sig = buffer.getBytes();
+
+            validateFValue();
+
             dh.setF(f);
             k = dh.getK();
 
             buffer = new ByteArrayBuffer(k_s);
-            serverKey = buffer.getRawPublicKey();
+            PublicKey serverKey = buffer.getRawPublicKey();
 
             String keyAlg = KeyUtils.getKeyType(serverKey);
             if (GenericUtils.isEmpty(keyAlg)) {
-                throw new SshException("Unsupported server key type");
+                throw new SshException(
+                        "Unsupported server key type: " + serverKey.getAlgorithm()
+                                       + " [" + serverKey.getFormat() + "]");
             }
 
             buffer = new ByteArrayBuffer();
@@ -158,23 +224,25 @@ public class DHGEXClient extends AbstractDHClientKeyExchange {
             buffer.putInt(min);
             buffer.putInt(prf);
             buffer.putInt(max);
-            buffer.putMPInt(p);
+            buffer.putMPInt(getP());
             buffer.putMPInt(g);
-            buffer.putMPInt(e);
+            buffer.putMPInt(getE());
             buffer.putMPInt(f);
             buffer.putMPInt(k);
             hash.update(buffer.array(), 0, buffer.available());
             h = hash.digest();
 
             Signature verif = ValidateUtils.checkNotNull(
-                NamedFactory.create(session.getSignatureFactories(), keyAlg),
-                "No verifier located for algorithm=%s", keyAlg);
-            verif.initVerifier(serverKey);
-            verif.update(h);
-            if (!verif.verify(sig)) {
-                throw new SshException(SshConstants.SSH2_DISCONNECT_KEY_EXCHANGE_FAILED,
-                    "KeyExchange signature verification failed for key type=" + keyAlg);
+                    NamedFactory.create(session.getSignatureFactories(), keyAlg),
+                    "No verifier located for algorithm=%s", keyAlg);
+            verif.initVerifier(session, serverKey);
+            verif.update(session, h);
+            if (!verif.verify(session, sig)) {
+                throw new SshException(
+                        SshConstants.SSH2_DISCONNECT_KEY_EXCHANGE_FAILED,
+                        "KeyExchange signature verification failed for key type=" + keyAlg);
             }
+            session.setServerKey(serverKey);
             return true;
         }
 

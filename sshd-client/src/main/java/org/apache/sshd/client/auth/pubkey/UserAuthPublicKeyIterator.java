@@ -50,9 +50,7 @@ public class UserAuthPublicKeyIterator extends AbstractKeyPairIterator<PublicKey
 
         try {
             Collection<Iterable<? extends PublicKeyIdentity>> identities = new ArrayList<>(2);
-
-            Iterable<? extends PublicKeyIdentity> sessionIds =
-                initializeSessionIdentities(session, signatureFactories);
+            Iterable<? extends PublicKeyIdentity> sessionIds = initializeSessionIdentities(session, signatureFactories);
             if (sessionIds != null) {
                 identities.add(sessionIds);
             }
@@ -60,12 +58,10 @@ public class UserAuthPublicKeyIterator extends AbstractKeyPairIterator<PublicKey
             if (identities.isEmpty()) {
                 current = Collections.emptyIterator();
             } else {
-                Iterable<? extends PublicKeyIdentity> keys =
-                    LazyIterablesConcatenator.lazyConcatenateIterables(identities);
+                Iterable<? extends PublicKeyIdentity> keys = LazyIterablesConcatenator.lazyConcatenateIterables(identities);
                 current = LazyMatchingTypeIterator.lazySelectMatchingTypes(keys.iterator(), PublicKeyIdentity.class);
             }
         } catch (Exception e) {
-
             throw e;
         }
     }
@@ -85,8 +81,10 @@ public class UserAuthPublicKeyIterator extends AbstractKeyPairIterator<PublicKey
                         KeyIdentityProvider sessionKeysProvider = ClientSession.providerOf(session);
                         keysHolder.set(sessionKeysProvider.loadKeys(session));
                     } catch (IOException | GeneralSecurityException e) {
-                        throw new RuntimeException("Unexpected " + e.getClass().getSimpleName() + ")"
-                            + " keys loading exception: " + e.getMessage(), e);
+                        throw new RuntimeException(
+                                "Unexpected " + e.getClass().getSimpleName() + ")"
+                                                   + " keys loading exception: " + e.getMessage(),
+                                e);
                     }
                 }
 
@@ -95,8 +93,7 @@ public class UserAuthPublicKeyIterator extends AbstractKeyPairIterator<PublicKey
 
                     {
                         @SuppressWarnings("synthetic-access")
-                        Iterable<KeyPair> sessionKeys =
-                            Objects.requireNonNull(keysHolder.get(), "No session keys available");
+                        Iterable<KeyPair> sessionKeys = Objects.requireNonNull(keysHolder.get(), "No session keys available");
                         keys = sessionKeys.iterator();
                     }
 
@@ -150,6 +147,5 @@ public class UserAuthPublicKeyIterator extends AbstractKeyPairIterator<PublicKey
 
     @Override
     public void close() throws IOException {
-
     }
 }

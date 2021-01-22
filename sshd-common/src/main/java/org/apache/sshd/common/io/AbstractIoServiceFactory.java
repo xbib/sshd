@@ -27,13 +27,14 @@ import org.apache.sshd.common.FactoryManagerHolder;
 import org.apache.sshd.common.util.closeable.AbstractCloseable;
 import org.apache.sshd.common.util.threads.CloseableExecutorService;
 import org.apache.sshd.common.util.threads.ExecutorServiceCarrier;
+import org.apache.sshd.common.CoreModuleProperties;
 
 /**
  * @author <a href="mailto:dev@mina.apache.org">Apache MINA SSHD Project</a>
  */
 public abstract class AbstractIoServiceFactory
-                extends AbstractCloseable
-                implements IoServiceFactory, FactoryManagerHolder, ExecutorServiceCarrier {
+        extends AbstractCloseable
+        implements IoServiceFactory, FactoryManagerHolder, ExecutorServiceCarrier {
 
     private IoServiceEventListener eventListener;
     private final FactoryManager manager;
@@ -95,11 +96,6 @@ public abstract class AbstractIoServiceFactory
     }
 
     public static int getNioWorkers(FactoryManager manager) {
-        int nb = manager.getIntProperty(FactoryManager.NIO_WORKERS, FactoryManager.DEFAULT_NIO_WORKERS);
-        if (nb > 0) {
-            return nb;
-        } else {
-            return FactoryManager.DEFAULT_NIO_WORKERS;
-        }
+        return CoreModuleProperties.NIO_WORKERS.getRequired(manager);
     }
 }

@@ -21,8 +21,7 @@ package org.apache.sshd.common.mac;
 import org.apache.sshd.common.util.NumberUtils;
 
 /**
- * Message Authentication Code for use in SSH.
- * It usually wraps a javax.crypto.Mac class.
+ * Message Authentication Code for use in SSH. It usually wraps a javax.crypto.Mac class.
  *
  * @author <a href="mailto:dev@mina.apache.org">Apache MINA SSHD Project</a>
  */
@@ -49,4 +48,32 @@ public interface Mac extends MacInformation {
     }
 
     void doFinal(byte[] buf, int offset) throws Exception;
+
+    /*
+     * Executes a more-or-less constant time verification in order
+     * to avoid timing side-channel information leak
+     */
+    static boolean equals(byte[] a1, int a1Offset, byte[] a2, int a2Offset, int length) {
+        int len1 = NumberUtils.length(a1);
+        int len2 = NumberUtils.length(a2);
+        int result = 0;
+
+        if (len1 < (a1Offset + length)) {
+            length = Math.min(length, len1 - a1Offset);
+            length = Math.max(length, 0);
+            result |= 0x00FF;
+        }
+
+        if (len2 < (a2Offset + length)) {
+            length = Math.min(length, len2 - a2Offset);
+            length = Math.max(length, 0);
+            result |= 0xFF00;
+        }
+
+        for (int cmpLen = length; cmpLen > 0; a1Offset++, a2Offset++, cmpLen--) {
+            result |= a1[a1Offset] ^ a2[a2Offset];
+        }
+
+        return result == 0;
+    }
 }

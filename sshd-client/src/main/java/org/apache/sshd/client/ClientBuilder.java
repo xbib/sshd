@@ -19,7 +19,6 @@
 
 package org.apache.sshd.client;
 
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.function.Function;
@@ -37,69 +36,39 @@ import org.apache.sshd.common.NamedFactory;
 import org.apache.sshd.common.channel.ChannelFactory;
 import org.apache.sshd.common.channel.RequestHandler;
 import org.apache.sshd.common.compression.BuiltinCompressions;
+import org.apache.sshd.common.compression.Compression;
 import org.apache.sshd.common.compression.CompressionFactory;
 import org.apache.sshd.common.config.keys.FilePasswordProvider;
 import org.apache.sshd.common.kex.DHFactory;
 import org.apache.sshd.common.kex.KeyExchange;
+import org.apache.sshd.common.kex.KeyExchangeFactory;
 import org.apache.sshd.common.session.ConnectionService;
-import org.apache.sshd.common.signature.BuiltinSignatures;
+import org.apache.sshd.common.signature.Signature;
 
 /**
  * SshClient builder
  */
 public class ClientBuilder extends BaseBuilder<SshClient, ClientBuilder> {
-    /**
-     * Preferred {@link BuiltinSignatures} according to
-     * <A HREF="https://www.freebsd.org/cgi/man.cgi?query=ssh_config&sektion=5">sshd_config(5)</A>
-     * {@code HostKeyAlgorithms} recommendation
-     */
-    public static final List<BuiltinSignatures> DEFAULT_SIGNATURE_PREFERENCE =
-        /*
-         * According to https://tools.ietf.org/html/rfc8332#section-3.3:
-         *
-         *      Implementation experience has shown that there are servers that apply
-         *      authentication penalties to clients attempting public key algorithms
-         *      that the SSH server does not support.
-         *
-         *      When authenticating with an RSA key against a server that does not
-         *      implement the "server-sig-algs" extension, clients MAY default to an
-         *      "ssh-rsa" signature to avoid authentication penalties.  When the new
-         *      rsa-sha2-* algorithms have been sufficiently widely adopted to
-         *      warrant disabling "ssh-rsa", clients MAY default to one of the new
-         *      algorithms.
-         *
-         * Therefore we do not include by default the "rsa-sha-*" signatures.
-         */
-        Collections.unmodifiableList(
-            Arrays.asList(
-                BuiltinSignatures.nistp256,
-                BuiltinSignatures.nistp384,
-                BuiltinSignatures.nistp521,
-                BuiltinSignatures.ed25519,
-                BuiltinSignatures.rsa,
-                BuiltinSignatures.dsa
-            ));
 
-    public static final Function<DHFactory, NamedFactory<KeyExchange>> DH2KEX = factory ->
-            factory == null
-                ? null
-                : factory.isGroupExchange()
+    @SuppressWarnings("checkstyle:Indentation")
+    public static final Function<DHFactory, KeyExchangeFactory> DH2KEX = factory -> factory == null
+            ? null
+            : factory.isGroupExchange()
                     ? DHGEXClient.newFactory(factory)
-                    : DHGClient.newFactory(factory);
+            : DHGClient.newFactory(factory);
 
     // Compression is not enabled by default for the client
-    public static final List<CompressionFactory> DEFAULT_COMPRESSION_FACTORIES =
-        Collections.unmodifiableList(Collections.singletonList(BuiltinCompressions.none));
+    public static final List<CompressionFactory> DEFAULT_COMPRESSION_FACTORIES
+            = Collections.unmodifiableList(Collections.singletonList(BuiltinCompressions.none));
 
-    public static final List<ChannelFactory> DEFAULT_CHANNEL_FACTORIES =
-            Collections.unmodifiableList(Collections.emptyList());
-        //Collections.unmodifiableList(Collections.singletonList(ForwardedTcpipFactory.INSTANCE));
-
-    public static final List<RequestHandler<ConnectionService>> DEFAULT_GLOBAL_REQUEST_HANDLERS =
-        Collections.unmodifiableList(Collections.singletonList(OpenSshHostKeysHandler.INSTANCE));
+    public static final List<ChannelFactory> DEFAULT_CHANNEL_FACTORIES
+            = Collections.unmodifiableList(Collections.emptyList());
+    public static final List<RequestHandler<ConnectionService>> DEFAULT_GLOBAL_REQUEST_HANDLERS
+            = Collections.unmodifiableList(Collections.singletonList(OpenSshHostKeysHandler.INSTANCE));
 
     public static final ServerKeyVerifier DEFAULT_SERVER_KEY_VERIFIER = AcceptAllServerKeyVerifier.INSTANCE;
-    public static final HostConfigEntryResolver DEFAULT_HOST_CONFIG_ENTRY_RESOLVER = DefaultConfigFileHostEntryResolver.INSTANCE;
+    public static final HostConfigEntryResolver DEFAULT_HOST_CONFIG_ENTRY_RESOLVER
+            = DefaultConfigFileHostEntryResolver.INSTANCE;
     public static final ClientIdentityLoader DEFAULT_CLIENT_IDENTITY_LOADER = ClientIdentityLoader.DEFAULT;
     public static final FilePasswordProvider DEFAULT_FILE_PASSWORD_PROVIDER = FilePasswordProvider.EMPTY;
 
@@ -137,11 +106,11 @@ public class ClientBuilder extends BaseBuilder<SshClient, ClientBuilder> {
         super.fillWithDefaultValues();
 
         if (signatureFactories == null) {
-            signatureFactories = NamedFactory.setUpBuiltinFactories(false, DEFAULT_SIGNATURE_PREFERENCE);
+            signatureFactories = setUpDefaultSignatureFactories(false);
         }
 
         if (compressionFactories == null) {
-            compressionFactories = NamedFactory.setUpBuiltinFactories(false, DEFAULT_COMPRESSION_FACTORIES);
+            compressionFactories = setUpDefaultCompressionFactories(false);
         }
 
         if (keyExchangeFactories == null) {
@@ -189,19 +158,27 @@ public class ClientBuilder extends BaseBuilder<SshClient, ClientBuilder> {
         return client;
     }
 
+    @SuppressWarnings({ "unchecked", "rawtypes" }) // safe due to the hierarchy
+    public static List<NamedFactory<Signature>> setUpDefaultSignatureFactories(boolean ignoreUnsupported) {
+        return (List) NamedFactory.setUpBuiltinFactories(ignoreUnsupported, DEFAULT_SIGNATURE_PREFERENCE);
+    }
+
+    @SuppressWarnings({ "unchecked", "rawtypes" }) // safe due to the hierarchy
+    public static List<NamedFactory<Compression>> setUpDefaultCompressionFactories(boolean ignoreUnsupported) {
+        return (List) NamedFactory.setUpBuiltinFactories(ignoreUnsupported, DEFAULT_COMPRESSION_FACTORIES);
+    }
+
     /**
-     * @param ignoreUnsupported If {@code true} then all the default
-     *                          key exchanges are included, regardless of whether they are currently
-     *                          supported by the JCE. Otherwise, only the supported ones out of the
-     *                          list are included
-     * @return A {@link List} of the default {@link NamedFactory}
-     * instances of the {@link KeyExchange}s according to the preference
-     * order defined by {@link #DEFAULT_KEX_PREFERENCE}.
-     * <B>Note:</B> the list may be filtered to exclude unsupported JCE
-     * key exchanges according to the ignoreUnsupported parameter
-     * @see org.apache.sshd.common.kex.BuiltinDHFactories#isSupported()
+     * @param  ignoreUnsupported If {@code true} then all the default key exchanges are included, regardless of whether
+     *                           they are currently supported by the JCE. Otherwise, only the supported ones out of the
+     *                           list are included
+     * @return                   A {@link List} of the default {@link NamedFactory} instances of the
+     *                           {@link KeyExchange}s according to the preference order defined by
+     *                           {@link #DEFAULT_KEX_PREFERENCE}. <B>Note:</B> the list may be filtered to exclude
+     *                           unsupported JCE key exchanges according to the <tt>ignoreUnsupported</tt> parameter
+     * @see                      org.apache.sshd.common.kex.BuiltinDHFactories#isSupported()
      */
-    public static List<NamedFactory<KeyExchange>> setUpDefaultKeyExchanges(boolean ignoreUnsupported) {
+    public static List<KeyExchangeFactory> setUpDefaultKeyExchanges(boolean ignoreUnsupported) {
         return NamedFactory.setUpTransformedFactories(ignoreUnsupported, DEFAULT_KEX_PREFERENCE, DH2KEX);
     }
 

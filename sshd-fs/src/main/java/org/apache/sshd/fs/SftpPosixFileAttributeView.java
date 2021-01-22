@@ -29,8 +29,8 @@ import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.UserPrincipal;
 import java.util.Set;
 
-import org.apache.sshd.client.subsystem.sftp.SftpClient;
 import org.apache.sshd.common.util.GenericUtils;
+import org.apache.sshd.client.SftpClient;
 
 /**
  * @author <a href="mailto:dev@mina.apache.org">Apache MINA SSHD Project</a>

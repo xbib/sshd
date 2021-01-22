@@ -23,12 +23,15 @@ import java.io.IOException;
 import java.nio.file.FileSystem;
 import java.nio.file.FileSystems;
 import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
 import java.nio.file.NotDirectoryException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 
 import org.apache.sshd.common.file.FileSystemFactory;
-import org.apache.sshd.common.session.Session;
+import org.apache.sshd.common.session.SessionContext;
+import org.apache.sshd.common.util.GenericUtils;
+import org.apache.sshd.common.util.OsUtils;
 import org.apache.sshd.common.util.ValidateUtils;
 import org.apache.sshd.common.util.logging.AbstractLoggingBean;
 
@@ -38,7 +41,7 @@ import org.apache.sshd.common.util.logging.AbstractLoggingBean;
  * @author <a href="http://mina.apache.org">Apache MINA Project</a>
  */
 public class NativeFileSystemFactory extends AbstractLoggingBean implements FileSystemFactory {
-    public static final String DEFAULT_USERS_HOME = "/home";
+    public static final String DEFAULT_USERS_HOME = OsUtils.isWin32() ? "C:\\Users" : OsUtils.isOSX() ? "/Users" : "/home";
 
     public static final NativeFileSystemFactory INSTANCE = new NativeFileSystemFactory();
 
@@ -64,7 +67,7 @@ public class NativeFileSystemFactory extends AbstractLoggingBean implements File
      * Set the root location where users home is to be created
      *
      * @param usersHomeDir The root location where users home is to be created - never {@code null}/empty.
-     * @see #isCreateHome()
+     * @see                #isCreateHome()
      */
     public void setUsersHomeDir(String usersHomeDir) {
         this.usersHomeDir = ValidateUtils.checkNotNullAndNotEmpty(usersHomeDir, "No users home dir");
@@ -82,21 +85,37 @@ public class NativeFileSystemFactory extends AbstractLoggingBean implements File
     /**
      * Set if the home directories be created automatically
      *
-     * @param createHome {@code true} if the file system should create the home directory
-     * automatically if not available
-     * @see #getUsersHomeDir()
+     * @param createHome {@code true} if the file system should create the home directory automatically if not available
+     * @see              #getUsersHomeDir()
      */
     public void setCreateHome(boolean createHome) {
         this.createHome = createHome;
     }
 
     @Override
-    public FileSystem createFileSystem(Session session) throws IOException {
+    public Path getUserHomeDir(SessionContext session) throws IOException {
         String userName = session.getUsername();
+        if (GenericUtils.isEmpty(userName)) {
+            return null;
+        }
+
+        String homeRoot = getUsersHomeDir();
+        if (GenericUtils.isEmpty(homeRoot)) {
+            return null;
+        }
+
+        return Paths.get(homeRoot, userName).normalize().toAbsolutePath();
+    }
+
+    @Override
+    public FileSystem createFileSystem(SessionContext session) throws IOException {
         // create home if does not exist
         if (isCreateHome()) {
-            String homeRoot = getUsersHomeDir();
-            Path homeDir = Paths.get(homeRoot, userName).normalize().toAbsolutePath();
+            Path homeDir = getUserHomeDir(session);
+            if (homeDir == null) {
+                throw new InvalidPathException(session.getUsername(), "Cannot resolve home directory");
+            }
+
             if (Files.exists(homeDir)) {
                 if (!Files.isDirectory(homeDir)) {
                     throw new NotDirectoryException(homeDir.toString());

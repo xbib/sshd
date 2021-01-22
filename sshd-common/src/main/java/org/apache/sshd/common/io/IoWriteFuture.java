@@ -23,15 +23,13 @@ import org.apache.sshd.common.future.VerifiableFuture;
 
 public interface IoWriteFuture extends SshFuture<IoWriteFuture>, VerifiableFuture<IoWriteFuture> {
     /**
-     * @return true if the write operation is finished successfully.
+     * @return <tt>true</tt> if the write operation is finished successfully.
      */
     boolean isWritten();
 
     /**
-     * @return the cause of the write failure if and only if the write
-     * operation has failed due to an {@link Exception}. Otherwise,
-     * {@code null} is returned (use {@link #isDone()} to distinguish
-     * between the two.
+     * @return the cause of the write failure if and only if the write operation has failed due to an {@link Exception}.
+     *         Otherwise, {@code null} is returned (use {@link #isDone()} to distinguish between the two.
      */
     Throwable getException();
 }

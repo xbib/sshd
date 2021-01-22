@@ -70,14 +70,13 @@ import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.TimeUnit;
 
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.apache.sshd.client.SshClient;
 import org.apache.sshd.client.auth.password.PasswordIdentityProvider;
 import org.apache.sshd.client.config.hosts.HostConfigEntryResolver;
 import org.apache.sshd.client.keyverifier.AcceptAllServerKeyVerifier;
 import org.apache.sshd.client.session.ClientSession;
-import org.apache.sshd.client.subsystem.sftp.SftpClient;
-import org.apache.sshd.client.subsystem.sftp.SftpClient.Attributes;
-import org.apache.sshd.client.subsystem.sftp.SftpVersionSelector;
 import org.apache.sshd.common.PropertyResolver;
 import org.apache.sshd.common.PropertyResolverUtils;
 import org.apache.sshd.common.SshConstants;
@@ -87,56 +86,49 @@ import org.apache.sshd.common.auth.BasicCredentialsProvider;
 import org.apache.sshd.common.auth.MutableBasicCredentials;
 import org.apache.sshd.common.io.IoSession;
 import org.apache.sshd.common.keyprovider.KeyIdentityProvider;
-import org.apache.sshd.common.keyprovider.KeyPairProvider;
-import org.apache.sshd.common.subsystem.sftp.SftpConstants;
-import org.apache.sshd.common.subsystem.sftp.SftpException;
 import org.apache.sshd.common.util.GenericUtils;
 import org.apache.sshd.common.util.NumberUtils;
 import org.apache.sshd.common.util.ValidateUtils;
 import org.apache.sshd.common.util.io.IoUtils;
-import org.apache.logging.log4j.Logger;
-import org.apache.logging.log4j.LogManager;
+import org.apache.sshd.common.util.logging.LoggingUtils;
+import org.apache.sshd.common.SftpModuleProperties;
+import org.apache.sshd.client.SftpClient;
+import org.apache.sshd.client.SftpClient.Attributes;
+import org.apache.sshd.client.SftpClient.OpenMode;
+import org.apache.sshd.client.SftpClientFactory;
+import org.apache.sshd.client.SftpVersionSelector;
+import org.apache.sshd.client.extensions.CopyFileExtension;
+import org.apache.sshd.client.impl.SftpRemotePathChannel;
+import org.apache.sshd.common.SftpConstants;
+import org.apache.sshd.common.SftpException;
 
 /**
- * A registered {@link FileSystemProvider} that registers the &quot;sftp://&quot;
- * scheme so that URLs with this protocol are handled as remote SFTP {@link Path}-s
- * - e.g., &quot;{@code sftp://user:password@host/remote/file/path}&quot;
+ * A registered {@link FileSystemProvider} that registers the &quot;sftp://&quot; scheme so that URLs with this protocol
+ * are handled as remote SFTP {@link Path}-s - e.g., &quot;{@code sftp://user:password@host/remote/file/path}&quot;
  *
  * @author <a href="mailto:dev@mina.apache.org">Apache MINA SSHD Project</a>
  */
 public class SftpFileSystemProvider extends FileSystemProvider {
-    public static final String READ_BUFFER_PROP_NAME = "sftp-fs-read-buffer-size";
-    public static final int DEFAULT_READ_BUFFER_SIZE = SftpClient.DEFAULT_READ_BUFFER_SIZE;
-    public static final String WRITE_BUFFER_PROP_NAME = "sftp-fs-write-buffer-size";
-    public static final int DEFAULT_WRITE_BUFFER_SIZE = SftpClient.DEFAULT_WRITE_BUFFER_SIZE;
-    public static final String CONNECT_TIME_PROP_NAME = "sftp-fs-connect-time";
-    public static final long DEFAULT_CONNECT_TIME = SftpClient.DEFAULT_WAIT_TIMEOUT;
-    public static final String AUTH_TIME_PROP_NAME = "sftp-fs-auth-time";
-    public static final long DEFAULT_AUTH_TIME = SftpClient.DEFAULT_WAIT_TIMEOUT;
-    public static final String NAME_DECORDER_CHARSET_PROP_NAME = "sftp-fs-name-decoder-charset";
-    public static final Charset DEFAULT_NAME_DECODER_CHARSET = SftpClient.DEFAULT_NAME_DECODING_CHARSET;
 
     /**
      * <P>
      * URI parameter that can be used to specify a special version selection. Options are:
      * </P>
      * <UL>
-     *      <LI>{@code max} - select maximum available version for the client</LI>
-     *      <LI>{@code min} - select minimum available version for the client</LI>
-     *      <LI>{@code current} - whatever version is reported by the server</LI>
-     *      <LI>{@code nnn} - select <U>only</U> the specified version</LI>
-     *      <LI>{@code a,b,c} - select one of the specified versions (if available) in preference order</LI>
+     * <LI>{@code max} - select maximum available version for the client</LI>
+     * <LI>{@code min} - select minimum available version for the client</LI>
+     * <LI>{@code current} - whatever version is reported by the server</LI>
+     * <LI>{@code nnn} - select <U>only</U> the specified version</LI>
+     * <LI>{@code a,b,c} - select one of the specified versions (if available) in preference order</LI>
      * </UL>
      */
     public static final String VERSION_PARAM = "version";
 
-    public static final Set<Class<? extends FileAttributeView>> UNIVERSAL_SUPPORTED_VIEWS =
-        Collections.unmodifiableSet(
+    public static final Set<Class<? extends FileAttributeView>> UNIVERSAL_SUPPORTED_VIEWS = Collections.unmodifiableSet(
             GenericUtils.asSet(
-                PosixFileAttributeView.class,
-                FileOwnerAttributeView.class,
-                BasicFileAttributeView.class
-            ));
+                    PosixFileAttributeView.class,
+                    FileOwnerAttributeView.class,
+                    BasicFileAttributeView.class));
 
     protected final Logger log;
 
@@ -155,10 +147,9 @@ public class SftpFileSystemProvider extends FileSystemProvider {
     }
 
     /**
-     * @param client The {@link SshClient} to use - if {@code null} then a
-     * default one will be setup and started. Otherwise, it is assumed that
-     * the client has already been started
-     * @see SshClient#setUpDefaultClient()
+     * @param client The {@link SshClient} to use - if {@code null} then a default one will be setup and started.
+     *               Otherwise, it is assumed that the client has already been started
+     * @see          SshClient#setUpDefaultClient()
      */
     public SftpFileSystemProvider(SshClient client) {
         this(client, SftpVersionSelector.CURRENT);
@@ -238,7 +229,6 @@ public class SftpFileSystemProvider extends FileSystemProvider {
             clientInstance.setPasswordIdentityProvider(PasswordIdentityProvider.EMPTY_PASSWORDS_PROVIDER);
             log.warn("passwords disabled");
         }
-
         String id = getFileSystemIdentifier(host, port, username);
         SftpFileSystemInitializationContext context = new SftpFileSystemInitializationContext(id, uri, env);
         context.setHost(host);
@@ -258,12 +248,11 @@ public class SftpFileSystemProvider extends FileSystemProvider {
         Map<String, Object> params = resolveFileSystemParameters(env, parseURIParameters(uri));
         PropertyResolver resolver = PropertyResolverUtils.toPropertyResolver(params);
         context.setPropertyResolver(resolver);
-        context.setMaxConnectTime(resolver.getLongProperty(CONNECT_TIME_PROP_NAME, DEFAULT_CONNECT_TIME));
-        context.setMaxAuthTime(resolver.getLongProperty(AUTH_TIME_PROP_NAME, DEFAULT_AUTH_TIME));
+        context.setMaxConnectTime(SftpModuleProperties.CONNECT_TIME.getRequired(resolver));
+        context.setMaxAuthTime(SftpModuleProperties.AUTH_TIME.getRequired(resolver));
 
         SftpVersionSelector selector = resolveSftpVersionSelector(uri, getSftpVersionSelector(), resolver);
-        Charset decodingCharset = PropertyResolverUtils.getCharset(
-            resolver, NAME_DECORDER_CHARSET_PROP_NAME, DEFAULT_NAME_DECODER_CHARSET);
+        Charset decodingCharset = SftpModuleProperties.NAME_DECODER_CHARSET.getRequired(resolver);
 
         SftpFileSystemClientSessionInitializer initializer = getSftpFileSystemClientSessionInitializer();
         SftpFileSystem fileSystem;
@@ -290,7 +279,7 @@ public class SftpFileSystemProvider extends FileSystemProvider {
                         PropertyResolverUtils.updateProperty(session, key, value);
                     }
 
-                    PropertyResolverUtils.updateProperty(session, SftpClient.NAME_DECODING_CHARSET, decodingCharset);
+                    SftpModuleProperties.NAME_DECODING_CHARSET.set(session, decodingCharset);
                 }
 
                 initializer.authenticateClientSession(this, context, session);
@@ -302,12 +291,12 @@ public class SftpFileSystemProvider extends FileSystemProvider {
                     try {
                         session.close();
                     } catch (IOException t) {
-                        if (log.isDebugEnabled()) {
-                            log.debug("Failed (" + t.getClass().getSimpleName() + ")"
-                                    + " to close session for new file system on " + host + ":" + port
-                                    + " due to " + e.getClass().getSimpleName() + "[" + e.getMessage() + "]"
-                                    + ": " + t.getMessage());
-                        }
+                        e.addSuppressed(t);
+                        LoggingUtils.debug(log,
+                                "Failed ({}) to close session for new file system on {}}:{} due to {}[{}]: {}",
+                                t.getClass().getSimpleName(), host, port, e.getClass().getSimpleName(), e.getMessage(),
+                                t.getMessage(),
+                                t);
                     }
                 }
 
@@ -321,15 +310,22 @@ public class SftpFileSystemProvider extends FileSystemProvider {
             }
         }
 
-        fileSystem.setReadBufferSize(resolver.getIntProperty(READ_BUFFER_PROP_NAME, DEFAULT_READ_BUFFER_SIZE));
-        fileSystem.setWriteBufferSize(resolver.getIntProperty(WRITE_BUFFER_PROP_NAME, DEFAULT_WRITE_BUFFER_SIZE));
+        Integer bs = SftpModuleProperties.READ_BUFFER_SIZE.getOrNull(resolver);
+        if (bs != null) {
+            fileSystem.setReadBufferSize(bs);
+        }
+        bs = SftpModuleProperties.WRITE_BUFFER_SIZE.getOrNull(resolver);
+        if (bs != null) {
+            fileSystem.setWriteBufferSize(bs);
+        }
         if (log.isDebugEnabled()) {
             log.debug("newFileSystem({}): {}", uri.toASCIIString(), fileSystem);
         }
         return fileSystem;
     }
 
-    protected SftpVersionSelector resolveSftpVersionSelector(URI uri, SftpVersionSelector defaultSelector, PropertyResolver resolver) {
+    protected SftpVersionSelector resolveSftpVersionSelector(
+            URI uri, SftpVersionSelector defaultSelector, PropertyResolver resolver) {
         String preference = resolver.getString(VERSION_PARAM);
         if (GenericUtils.isEmpty(preference)) {
             return defaultSelector;
@@ -339,25 +335,14 @@ public class SftpFileSystemProvider extends FileSystemProvider {
             log.debug("resolveSftpVersionSelector({}) preference={}", uri, preference);
         }
 
+        // These are aliases for shorter parameters specification
         if ("max".equalsIgnoreCase(preference)) {
             return SftpVersionSelector.MAXIMUM;
         } else if ("min".equalsIgnoreCase(preference)) {
             return SftpVersionSelector.MINIMUM;
-        } else if ("current".equalsIgnoreCase(preference)) {
-            return SftpVersionSelector.CURRENT;
+        } else {
+            return SftpVersionSelector.resolveVersionSelector(preference);
         }
-
-        String[] values = GenericUtils.split(preference, ',');
-        if (values.length == 1) {
-            return SftpVersionSelector.fixedVersionSelector(Integer.parseInt(values[0]));
-        }
-
-        int[] preferred = new int[values.length];
-        for (int index = 0; index < values.length; index++) {
-            preferred[index] = Integer.parseInt(values[index]);
-        }
-
-        return SftpVersionSelector.preferredVersionSelector(preferred);
     }
 
     // NOTE: URI parameters override environment ones
@@ -377,9 +362,9 @@ public class SftpFileSystemProvider extends FileSystemProvider {
     /**
      * Attempts to parse the user information from the URI
      *
-     * @param uri The {@link URI} value - ignored if {@code null} or does not
-     * contain any {@link URI#getUserInfo() user info}.
-     * @return The parsed credentials - {@code null} if none available
+     * @param  uri The {@link URI} value - ignored if {@code null} or does not contain any {@link URI#getUserInfo() user
+     *             info}.
+     * @return     The parsed credentials - {@code null} if none available
      */
     public static MutableBasicCredentials parseCredentials(URI uri) {
         return parseCredentials((uri == null) ? "" : uri.getUserInfo());
@@ -392,7 +377,7 @@ public class SftpFileSystemProvider extends FileSystemProvider {
 
         int pos = userInfo.indexOf(':');
         if (pos < 0) {
-            return new BasicCredentialsImpl(userInfo, null);    // assume password-less login
+            return new BasicCredentialsImpl(userInfo, null); // assume password-less login
         }
 
         return new BasicCredentialsImpl(userInfo.substring(0, pos), userInfo.substring(pos + 1));
@@ -448,8 +433,14 @@ public class SftpFileSystemProvider extends FileSystemProvider {
             fileSystems.put(id, fileSystem);
         }
 
-        fileSystem.setReadBufferSize(session.getIntProperty(READ_BUFFER_PROP_NAME, DEFAULT_READ_BUFFER_SIZE));
-        fileSystem.setWriteBufferSize(session.getIntProperty(WRITE_BUFFER_PROP_NAME, DEFAULT_WRITE_BUFFER_SIZE));
+        Integer rbs = session.getInteger(SftpModuleProperties.READ_BUFFER_SIZE.getName());
+        if (rbs != null) {
+            fileSystem.setReadBufferSize(rbs);
+        }
+        Integer wbs = session.getInteger(SftpModuleProperties.WRITE_BUFFER_SIZE.getName());
+        if (wbs != null) {
+            fileSystem.setWriteBufferSize(wbs);
+        }
         if (log.isDebugEnabled()) {
             log.debug("newFileSystem: {}", fileSystem);
         }
@@ -468,8 +459,8 @@ public class SftpFileSystemProvider extends FileSystemProvider {
     }
 
     /**
-     * @param id File system identifier - ignored if {@code null}/empty
-     * @return The removed {@link SftpFileSystem} - {@code null} if no match
+     * @param  id File system identifier - ignored if {@code null}/empty
+     * @return    The removed {@link SftpFileSystem} - {@code null} if no match
      */
     public SftpFileSystem removeFileSystem(String id) {
         if (GenericUtils.isEmpty(id)) {
@@ -488,8 +479,8 @@ public class SftpFileSystemProvider extends FileSystemProvider {
     }
 
     /**
-     * @param id File system identifier - ignored if {@code null}/empty
-     * @return The cached {@link SftpFileSystem} - {@code null} if no match
+     * @param  id File system identifier - ignored if {@code null}/empty
+     * @return    The cached {@link SftpFileSystem} - {@code null} if no match
      */
     public SftpFileSystem getFileSystem(String id) {
         if (GenericUtils.isEmpty(id)) {
@@ -508,24 +499,52 @@ public class SftpFileSystemProvider extends FileSystemProvider {
     }
 
     @Override
-    public FileChannel newByteChannel(Path path, Set<? extends OpenOption> options, FileAttribute<?>... attrs) throws IOException {
+    public FileChannel newByteChannel(Path path, Set<? extends OpenOption> options, FileAttribute<?>... attrs)
+            throws IOException {
         return newFileChannel(path, options, attrs);
     }
 
     @Override
-    public FileChannel newFileChannel(Path path, Set<? extends OpenOption> options, FileAttribute<?>... attrs) throws IOException {
-        Collection<SftpClient.OpenMode> modes = SftpClient.OpenMode.fromOpenOptions(options);
+    public FileChannel newFileChannel(Path path, Set<? extends OpenOption> options, FileAttribute<?>... attrs)
+            throws IOException {
+        Collection<OpenMode> modes = OpenMode.fromOpenOptions(options);
         if (modes.isEmpty()) {
-            modes = EnumSet.of(SftpClient.OpenMode.Read, SftpClient.OpenMode.Write);
+            modes = EnumSet.of(OpenMode.Read, OpenMode.Write);
         }
         // TODO: process file attributes
-        return new SftpFileSystemChannel(toSftpPath(path), modes);
+        SftpPath p = toSftpPath(path);
+        return new SftpRemotePathChannel(p.toString(), p.getFileSystem().getClient(), true, modes);
+    }
+
+    @Override
+    public InputStream newInputStream(Path path, OpenOption... options) throws IOException {
+        Collection<OpenMode> modes = OpenMode.fromOpenOptions(Arrays.asList(options));
+        if (modes.isEmpty()) {
+            modes = EnumSet.of(OpenMode.Read);
+        }
+        SftpPath p = toSftpPath(path);
+        return p.getFileSystem().getClient().read(p.toString(), modes);
+    }
+
+    @Override
+    public OutputStream newOutputStream(Path path, OpenOption... options) throws IOException {
+        Set<OpenMode> modes = OpenMode.fromOpenOptions(Arrays.asList(options));
+        if (modes.contains(OpenMode.Read)) {
+            throw new IllegalArgumentException("READ not allowed");
+        }
+        if (modes.isEmpty()) {
+            modes = EnumSet.of(OpenMode.Create, OpenMode.Truncate, OpenMode.Write);
+        } else {
+            modes.add(OpenMode.Write);
+        }
+        SftpPath p = toSftpPath(path);
+        return p.getFileSystem().getClient().write(p.toString(), modes);
     }
 
     @Override
     public DirectoryStream<Path> newDirectoryStream(Path dir, DirectoryStream.Filter<? super Path> filter) throws IOException {
         final SftpPath p = toSftpPath(dir);
-        return new SftpDirectoryStream(p);
+        return new SftpDirectoryStream(p, filter);
     }
 
     @Override
@@ -628,9 +647,14 @@ public class SftpFileSystemProvider extends FileSystemProvider {
         if (attrs.isDirectory()) {
             createDirectory(target);
         } else {
-            try (InputStream in = newInputStream(source);
-                 OutputStream os = newOutputStream(target)) {
-                IoUtils.copy(in, os);
+            CopyFileExtension copyFile = src.getFileSystem().getClient().getExtension(CopyFileExtension.class);
+            if (copyFile.isSupported()) {
+                copyFile.copyFile(source.toString(), target.toString(), false);
+            } else {
+                try (InputStream in = newInputStream(source);
+                     OutputStream os = newOutputStream(target)) {
+                    IoUtils.copy(in, os);
+                }
             }
         }
 
@@ -736,7 +760,8 @@ public class SftpFileSystemProvider extends FileSystemProvider {
     public FileStore getFileStore(Path path) throws IOException {
         FileSystem fs = path.getFileSystem();
         if (!(fs instanceof SftpFileSystem)) {
-            throw new FileSystemException(path.toString(), path.toString(), "getFileStore(" + path + ") path not attached to an SFTP file system");
+            throw new FileSystemException(
+                    path.toString(), path.toString(), "getFileStore(" + path + ") path not attached to an SFTP file system");
         }
 
         SftpFileSystem sftpFs = (SftpFileSystem) fs;
@@ -824,7 +849,8 @@ public class SftpFileSystemProvider extends FileSystemProvider {
             }
         }
 
-        throw new UnsupportedOperationException("getFileAttributeView(" + path + ") view not supported: " + type.getSimpleName());
+        throw new UnsupportedOperationException(
+                "getFileAttributeView(" + path + ") view not supported: " + type.getSimpleName());
     }
 
     public boolean isSupportedFileAttributeView(Path path, Class<? extends FileAttributeView> type) {
@@ -838,7 +864,7 @@ public class SftpFileSystemProvider extends FileSystemProvider {
         } else if (PosixFileAttributeView.class.isAssignableFrom(type)) {
             return views.contains("posix");
         } else if (AclFileAttributeView.class.isAssignableFrom(type)) {
-            return views.contains("acl");   // must come before owner view
+            return views.contains("acl"); // must come before owner view
         } else if (FileOwnerAttributeView.class.isAssignableFrom(type)) {
             return views.contains("owner");
         } else if (BasicFileAttributeView.class.isAssignableFrom(type)) {
@@ -849,7 +875,8 @@ public class SftpFileSystemProvider extends FileSystemProvider {
     }
 
     @Override
-    public <A extends BasicFileAttributes> A readAttributes(Path path, Class<A> type, LinkOption... options) throws IOException {
+    public <A extends BasicFileAttributes> A readAttributes(Path path, Class<A> type, LinkOption... options)
+            throws IOException {
         if (type.isAssignableFrom(PosixFileAttributes.class)) {
             return type.cast(getFileAttributeView(path, PosixFileAttributeView.class, options).readAttributes());
         }
@@ -878,29 +905,34 @@ public class SftpFileSystemProvider extends FileSystemProvider {
         SftpFileSystem fs = p.getFileSystem();
         Collection<String> views = fs.supportedFileAttributeViews();
         if (GenericUtils.isEmpty(views) || (!views.contains(view))) {
-            throw new UnsupportedOperationException("readAttributes(" + path + ")[" + view + ":" + attrs + "] view not supported: " + views);
+            throw new UnsupportedOperationException(
+                    "readAttributes(" + path + ")[" + view + ":" + attrs + "] view not supported: " + views);
         }
 
         if ("basic".equalsIgnoreCase(view) || "posix".equalsIgnoreCase(view) || "owner".equalsIgnoreCase(view)) {
             return readPosixViewAttributes(p, view, attrs, options);
         } else if ("acl".equalsIgnoreCase(view)) {
             return readAclViewAttributes(p, view, attrs, options);
-        } else  {
+        } else {
             return readCustomViewAttributes(p, view, attrs, options);
         }
     }
 
-    protected Map<String, Object> readCustomViewAttributes(SftpPath path, String view, String attrs, LinkOption... options) throws IOException {
-        throw new UnsupportedOperationException("readCustomViewAttributes(" + path + ")[" + view + ":" + attrs + "] view not supported");
+    protected Map<String, Object> readCustomViewAttributes(SftpPath path, String view, String attrs, LinkOption... options)
+            throws IOException {
+        throw new UnsupportedOperationException(
+                "readCustomViewAttributes(" + path + ")[" + view + ":" + attrs + "] view not supported");
     }
 
-    protected NavigableMap<String, Object> readAclViewAttributes(SftpPath path, String view, String attrs, LinkOption... options) throws IOException {
+    protected NavigableMap<String, Object> readAclViewAttributes(
+            SftpPath path, String view, String attrs, LinkOption... options)
+            throws IOException {
         if ("*".equals(attrs)) {
             attrs = "acl,owner";
         }
 
         SftpFileSystem fs = path.getFileSystem();
-        SftpClient.Attributes attributes;
+        Attributes attributes;
         try (SftpClient client = fs.getClient()) {
             attributes = readRemoteAttributes(path, options);
         }
@@ -932,11 +964,11 @@ public class SftpFileSystemProvider extends FileSystemProvider {
         return map;
     }
 
-    public SftpClient.Attributes readRemoteAttributes(SftpPath path, LinkOption... options) throws IOException {
+    public Attributes readRemoteAttributes(SftpPath path, LinkOption... options) throws IOException {
         SftpFileSystem fs = path.getFileSystem();
         try (SftpClient client = fs.getClient()) {
             try {
-                SftpClient.Attributes attrs;
+                Attributes attrs;
                 if (IoUtils.followLinks(options)) {
                     attrs = client.stat(path.toString());
                 } else {
@@ -957,7 +989,7 @@ public class SftpFileSystemProvider extends FileSystemProvider {
 
     protected NavigableMap<String, Object> readPosixViewAttributes(
             SftpPath path, String view, String attrs, LinkOption... options)
-                throws IOException {
+            throws IOException {
         PosixFileAttributes v = readAttributes(path, PosixFileAttributes.class, options);
         if ("*".equals(attrs)) {
             attrs = "lastModifiedTime,lastAccessTime,creationTime,size,isRegularFile,isDirectory,isSymbolicLink,isOther,fileKey,owner,permissions,group";
@@ -1034,10 +1066,12 @@ public class SftpFileSystemProvider extends FileSystemProvider {
         SftpFileSystem fs = p.getFileSystem();
         Collection<String> views = fs.supportedFileAttributeViews();
         if (GenericUtils.isEmpty(views) || (!views.contains(view))) {
-            throw new UnsupportedOperationException("setAttribute(" + path + ")[" + view + ":" + attr + "=" + value + "] view " + view + " not supported: " + views);
+            throw new UnsupportedOperationException(
+                    "setAttribute(" + path + ")[" + view + ":" + attr + "=" + value + "] view " + view + " not supported: "
+                                                    + views);
         }
 
-        SftpClient.Attributes attributes = new SftpClient.Attributes();
+        Attributes attributes = new Attributes();
         switch (attr) {
             case "lastModifiedTime":
                 attributes.modifyTime((int) ((FileTime) value).to(TimeUnit.SECONDS));
@@ -1075,7 +1109,8 @@ public class SftpFileSystemProvider extends FileSystemProvider {
             case "isSymbolicLink":
             case "isOther":
             case "fileKey":
-                throw new UnsupportedOperationException("setAttribute(" + path + ")[" + view + ":" + attr + "=" + value + "] modification N/A");
+                throw new UnsupportedOperationException(
+                        "setAttribute(" + path + ")[" + view + ":" + attr + "=" + value + "] modification N/A");
             default:
                 if (log.isTraceEnabled()) {
                     log.trace("setAttribute({})[{}] ignore {}:{}={}", fs, path, view, attr, value);
@@ -1275,7 +1310,7 @@ public class SftpFileSystemProvider extends FileSystemProvider {
                 case OTHERS_EXECUTE:
                     pf |= SftpConstants.S_IXOTH;
                     break;
-                default:    // ignored
+                default: // ignored
             }
         }
 
@@ -1285,10 +1320,9 @@ public class SftpFileSystemProvider extends FileSystemProvider {
     /**
      * Uses the host, port and username to create a unique identifier
      *
-     * @param uri The {@link URI} - <B>Note:</B> not checked to make sure
-     *            that the scheme is {@code sftp://}
-     * @return The unique identifier
-     * @see #getFileSystemIdentifier(String, int, String)
+     * @param  uri The {@link URI} - <B>Note:</B> not checked to make sure that the scheme is {@code sftp://}
+     * @return     The unique identifier
+     * @see        #getFileSystemIdentifier(String, int, String)
      */
     public static String getFileSystemIdentifier(URI uri) {
         String userInfo = ValidateUtils.checkNotNullAndNotEmpty(uri.getUserInfo(), "UserInfo not provided");
@@ -1300,9 +1334,9 @@ public class SftpFileSystemProvider extends FileSystemProvider {
     /**
      * Uses the remote host address, port and current username to create a unique identifier
      *
-     * @param session The {@link ClientSession}
-     * @return The unique identifier
-     * @see #getFileSystemIdentifier(String, int, String)
+     * @param  session The {@link ClientSession}
+     * @return         The unique identifier
+     * @see            #getFileSystemIdentifier(String, int, String)
      */
     public static String getFileSystemIdentifier(ClientSession session) {
         IoSession ioSession = session.getIoSession();
@@ -1318,8 +1352,8 @@ public class SftpFileSystemProvider extends FileSystemProvider {
 
     public static String getFileSystemIdentifier(String host, int port, String username) {
         return GenericUtils.trimToEmpty(host) + ':'
-                + ((port <= 0) ? SshConstants.DEFAULT_PORT : port) + ':'
-                + GenericUtils.trimToEmpty(username);
+               + SshConstants.TO_EFFECTIVE_PORT.applyAsInt(port) + ':'
+               + GenericUtils.trimToEmpty(username);
     }
 
     public static URI createFileSystemURI(String host, int port, String username, String password) {
@@ -1352,8 +1386,10 @@ public class SftpFileSystemProvider extends FileSystemProvider {
             String userAuth = encodeCredentials(username, password);
             return new URI(SftpConstants.SFTP_SUBSYSTEM_NAME, userAuth, host, port, "/", queryPart, null);
         } catch (URISyntaxException e) {
-            throw new IllegalArgumentException("Failed (" + e.getClass().getSimpleName() + ")"
-                    + " to create access URI: " + e.getMessage(), e);
+            throw new IllegalArgumentException(
+                    "Failed (" + e.getClass().getSimpleName() + ")"
+                                               + " to create access URI: " + e.getMessage(),
+                    e);
         }
     }
 
@@ -1361,22 +1397,20 @@ public class SftpFileSystemProvider extends FileSystemProvider {
         ValidateUtils.checkNotNullAndNotEmpty(username, "No username provided");
 
         /*
-         * There is no way to properly encode/decode credentials that already contain
-         * colon. See also https://tools.ietf.org/html/rfc3986#section-3.2.1:
+         * There is no way to properly encode/decode credentials that already contain colon. See also
+         * https://tools.ietf.org/html/rfc3986#section-3.2.1:
          *
          *
-         *      Use of the format "user:password" in the userinfo field is
-         *      deprecated.  Applications should not render as clear text any data
-         *      after the first colon (":") character found within a userinfo
-         *      subcomponent unless the data after the colon is the empty string
-         *      (indicating no password).  Applications may choose to ignore or
-         *      reject such data when it is received as part of a reference and
-         *      should reject the storage of such data in unencrypted form.
+         * Use of the format "user:password" in the userinfo field is deprecated. Applications should not render as
+         * clear text any data after the first colon (":") character found within a userinfo subcomponent unless the
+         * data after the colon is the empty string (indicating no password). Applications may choose to ignore or
+         * reject such data when it is received as part of a reference and should reject the storage of such data in
+         * unencrypted form.
          */
         ValidateUtils.checkTrue((username.indexOf(':') < 0) && ((password == null) || (password.indexOf(':') < 0)),
-            "Reserved character used in credentials");
+                "Reserved character used in credentials");
         if (password == null) {
-            return username;    // assume password-less login required
+            return username; // assume password-less login required
         } else {
             return username + ":" + password;
         }

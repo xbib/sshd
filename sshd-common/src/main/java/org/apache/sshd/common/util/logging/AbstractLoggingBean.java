@@ -26,9 +26,8 @@ import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.LogManager;
 
 /**
- * Serves as a common base class for the vast majority of classes that require
- * some kind of logging. Facilitates quick and easy replacement of the actual used
- * logger from one framework to another
+ * Serves as a common base class for the vast majority of classes that require some kind of logging. Facilitates quick
+ * and easy replacement of the actual used logger from one framework to another
  *
  * @author <a href="mailto:dev@mina.apache.org">Apache MINA SSHD Project</a>
  */
@@ -38,24 +37,33 @@ public abstract class AbstractLoggingBean {
 
     /**
      * Default constructor - creates a logger using the full class name
+     *
+     * @see #AbstractLoggingBean(Logger)
      */
     protected AbstractLoggingBean() {
-        this("");
+        this((Logger) null);
     }
 
     /**
-     * Create a logger for instances of the same class for which we might
-     * want to have a &quot;discriminator&quot; for them
+     * Create a logger for instances of the same class for which we might want to have a &quot;discriminator&quot; for
+     * them
      *
-     * @param discriminator The discriminator value - ignored if {@code null}
-     * or empty
+     * @param discriminator The discriminator value - ignored if {@code null} or empty
      */
     protected AbstractLoggingBean(String discriminator) {
         String name = getClass().getName();
-        if (GenericUtils.length(discriminator) > 0) {
+        if (GenericUtils.isNotEmpty(discriminator)) {
             name += "[" + discriminator + "]";
         }
         log = LogManager.getLogger(name);
+    }
+
+    /**
+     * @param logger The {@link Logger} instance to use - if {@code null} then one is retrieved using the full class
+     *               name
+     */
+    protected AbstractLoggingBean(Logger logger) {
+        log = (logger == null) ? LogManager.getLogger(getClass()) : logger;
     }
 
     protected SimplifiedLog getSimplifiedLogger() {
@@ -68,5 +76,93 @@ public abstract class AbstractLoggingBean {
         }
 
         return logger;
+    }
+
+    protected void debug(String message, Object o1, Object o2, Throwable t) {
+        LoggingUtils.debug(log, message, o1, o2, t);
+    }
+
+    protected void debug(String message, Object o1, Object o2, Object o3, Throwable t) {
+        LoggingUtils.debug(log, message, o1, o2, o3, t);
+    }
+
+    protected void debug(String message, Object o1, Object o2, Object o3, Object o4, Throwable t) {
+        LoggingUtils.debug(log, message, o1, o2, o3, o4, t);
+    }
+
+    protected void debug(String message, Object o1, Object o2, Object o3, Object o4, Object o5, Throwable t) {
+        LoggingUtils.debug(log, message, o1, o2, o3, o4, o5, t);
+    }
+
+    protected void debug(String message, Object o1, Object o2, Object o3, Object o4, Object o5, Object o6, Throwable t) {
+        LoggingUtils.debug(log, message, o1, o2, o3, o4, o5, o6, t);
+    }
+
+    protected void info(String message, Object o1, Object o2, Throwable t) {
+        LoggingUtils.info(log, message, o1, o2, t);
+    }
+
+    protected void info(String message, Object o1, Object o2, Object o3, Throwable t) {
+        LoggingUtils.info(log, message, o1, o2, o3, t);
+    }
+
+    protected void warn(String message, Object o1, Object o2, Throwable t) {
+        LoggingUtils.warn(log, message, o1, o2, t);
+    }
+
+    protected void warn(String message, Object o1, Object o2, Object o3, Throwable t) {
+        LoggingUtils.warn(log, message, o1, o2, o3, t);
+    }
+
+    protected void warn(String message, Object o1, Object o2, Object o3, Object o4, Throwable t) {
+        LoggingUtils.warn(log, message, o1, o2, o3, o4, t);
+    }
+
+    protected void warn(String message, Object o1, Object o2, Object o3, Object o4, Object o5, Throwable t) {
+        LoggingUtils.warn(log, message, o1, o2, o3, o4, o5, t);
+    }
+
+    protected void warn(String message, Object o1, Object o2, Object o3, Object o4, Object o5, Object o6, Throwable t) {
+        LoggingUtils.warn(log, message, o1, o2, o3, o4, o5, o6, t);
+    }
+
+    @SuppressWarnings("all")
+    protected void warn(
+            String message, Object o1, Object o2, Object o3, Object o4, Object o5, Object o6, Object o7, Throwable t) {
+        LoggingUtils.warn(log, message, o1, o2, o3, o4, o5, o6, o7, t);
+    }
+
+    @SuppressWarnings("all")
+    protected void warn(
+            String message, Object o1, Object o2, Object o3, Object o4, Object o5, Object o6, Object o7, Object o8,
+            Throwable t) {
+        LoggingUtils.warn(log, message, o1, o2, o3, o4, o5, o6, o7, o8, t);
+    }
+
+    @SuppressWarnings("all")
+    protected void warn(
+            String message, Object o1, Object o2, Object o3, Object o4, Object o5, Object o6, Object o7, Object o8, Object o9,
+            Throwable t) {
+        LoggingUtils.warn(log, message, o1, o2, o3, o4, o5, o6, o7, o8, o9, t);
+    }
+
+    protected void error(String message, Object o1, Object o2, Throwable t) {
+        LoggingUtils.error(log, message, o1, o2, t);
+    }
+
+    protected void error(String message, Object o1, Object o2, Object o3, Throwable t) {
+        LoggingUtils.error(log, message, o1, o2, o3, t);
+    }
+
+    protected void error(String message, Object o1, Object o2, Object o3, Object o4, Throwable t) {
+        LoggingUtils.error(log, message, o1, o2, o3, o4, t);
+    }
+
+    protected void error(String message, Object o1, Object o2, Object o3, Object o4, Object o5, Throwable t) {
+        LoggingUtils.error(log, message, o1, o2, o3, o4, o5, t);
+    }
+
+    protected void error(String message, Object o1, Object o2, Object o3, Object o4, Object o5, Object o6, Throwable t) {
+        LoggingUtils.error(log, message, o1, o2, o3, o4, o5, o6, t);
     }
 }

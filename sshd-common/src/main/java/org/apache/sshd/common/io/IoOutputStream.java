@@ -18,8 +18,26 @@
  */
 package org.apache.sshd.common.io;
 
-import org.apache.sshd.common.Closeable;
+import java.io.IOException;
 
-public interface IoOutputStream extends Closeable, PacketWriter {
-    // nothing extra
+import org.apache.sshd.common.Closeable;
+import org.apache.sshd.common.util.buffer.Buffer;
+
+/**
+ * Represents a stream that can be written asynchronously.
+ *
+ * @author <a href="mailto:dev@mina.apache.org">Apache MINA SSHD Project</a>
+ */
+public interface IoOutputStream extends Closeable {
+
+    /**
+     * Write the given buffer.
+     *
+     * @param  buffer      the data to write. <B>NOTE:</B> the buffer must not be touched until the returned write
+     *                     future is completed.
+     * @return             An {@code IoWriteFuture} that can be used to check when the data has actually been written.
+     * @throws IOException if an error occurred when writing the data
+     */
+    IoWriteFuture writeBuffer(Buffer buffer) throws IOException;
+
 }

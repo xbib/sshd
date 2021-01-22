@@ -32,7 +32,7 @@ import org.apache.sshd.common.util.buffer.Buffer;
 import org.apache.sshd.common.util.closeable.AbstractInnerCloseable;
 
 /**
- * An {@link IoOutputStream} capable of queuing write requests
+ * An {@link IoOutputStream} capable of queuing write requests.
  */
 public class BufferedIoOutputStream extends AbstractInnerCloseable implements IoOutputStream {
     protected final IoOutputStream out;
@@ -50,9 +50,9 @@ public class BufferedIoOutputStream extends AbstractInnerCloseable implements Io
     }
 
     @Override
-    public IoWriteFuture writePacket(Buffer buffer) throws IOException {
+    public IoWriteFuture writeBuffer(Buffer buffer) throws IOException {
         if (isClosing()) {
-            throw new EOFException("Closed");
+            throw new EOFException("Closed - state=" + state);
         }
 
         IoWriteFutureImpl future = new IoWriteFutureImpl(getId(), buffer);
@@ -71,28 +71,29 @@ public class BufferedIoOutputStream extends AbstractInnerCloseable implements Io
             return;
         }
 
-        out.writePacket(future.getBuffer()).addListener(new SshFutureListener<IoWriteFuture>() {
-            @Override
-            public void operationComplete(IoWriteFuture f) {
-                if (f.isWritten()) {
-                    future.setValue(Boolean.TRUE);
-                } else {
-                    future.setValue(f.getException());
-                }
-                finishWrite();
-            }
+        out.writeBuffer(future.getBuffer()).addListener(
+                new SshFutureListener<IoWriteFuture>() {
+                    @Override
+                    public void operationComplete(IoWriteFuture f) {
+                        if (f.isWritten()) {
+                            future.setValue(Boolean.TRUE);
+                        } else {
+                            future.setValue(f.getException());
+                        }
+                        finishWrite(future);
+                    }
+                });
+    }
 
-            @SuppressWarnings("synthetic-access")
-            private void finishWrite() {
-                writes.remove(future);
-                currentWrite.compareAndSet(future, null);
-                try {
-                    startWriting();
-                } catch (IOException e) {
-                    log.error("finishWrite({}) failed ({}) re-start writing", out, e.getClass().getSimpleName());
-                }
-            }
-        });
+    protected void finishWrite(IoWriteFutureImpl future) {
+        writes.remove(future);
+        currentWrite.compareAndSet(future, null);
+        try {
+            startWriting();
+        } catch (IOException e) {
+            error("finishWrite({}) failed ({}) re-start writing: {}",
+                    out, e.getClass().getSimpleName(), e.getMessage(), e);
+        }
     }
 
     @Override
